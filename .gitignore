@@ -1,0 +1,20 @@
+# Your own data: settings (with API keys), library, ratings, watched history, artwork cache, logs, backups
+Data/
+
+# Built by Build-PictureHouseExe.cmd
+Picture House.exe
+Picture House.exe.old
+Build-PictureHouseExe.log
+
+# Anything that might hold keys
+*.key
+secrets*.json
+settings.json
+
+# Windows / editor clutter
+Thumbs.db
+desktop.ini
+.DS_Store
+*.tmp
+*.bak
+.vscode/
