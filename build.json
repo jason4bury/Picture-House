@@ -1,0 +1,7 @@
+{
+  "AppName": "Picture House",
+  "EntryScript": "src\\Picture-House.ps1",
+  "Icon": "assets\\Picture-House.ico",
+  "Side": "Home",
+  "IncludeFiles": []
+}

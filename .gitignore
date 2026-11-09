@@ -1,20 +1,30 @@
-# Your own data: settings (with API keys), library, ratings, watched history, artwork cache, logs, backups
+# Builds live in ..\Builds\, outside the repo. Safety net in case one lands here.
+*.exe
+*.exe.old
+
+# Your own data: settings (with API keys), library, ratings, watched history, artwork cache,
+# logs and backups. 1.00+ keeps it in %APPDATA%\Picture House; these catch the old
+# "Data" folder (and "Data (moved to AppData)") if a copy is ever left in the repo.
 Data/
+Data*/
 
-# Built by Build-PictureHouseExe.cmd
-Picture House.exe
-Picture House.exe.old
-Build-PictureHouseExe.log
+# Logs and temp files (build log, launcher logs)
+*.log
+*.tmp
+*.bak
 
-# Anything that might hold keys
-*.key
-secrets*.json
+# Local config and secrets
+config.local.json
+.env
 settings.json
+secrets*.json
+*.key
 
-# Windows / editor clutter
+# Windows clutter
 Thumbs.db
 desktop.ini
 .DS_Store
-*.tmp
-*.bak
+
+# Editor
 .vscode/
+*.swp

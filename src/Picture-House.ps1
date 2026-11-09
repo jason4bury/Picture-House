@@ -1,13 +1,15 @@
 ﻿<#
     Picture House — a film library for the NAS
     -------------------------------------------
-    Version : 1.2.27 (26 Oct 2026)
+    Version : 1.00 (7 Nov 2026)
     Author  : Jason Rhodes
-    Needs   : Windows PowerShell 5.1 or PowerShell 7 (Windows), .NET WPF
-    Launch  : Start-PictureHouse.cmd  (or: powershell -STA -ExecutionPolicy Bypass -File Picture-House.ps1)
+    Licence : MIT (see LICENSE)
+    Needs   : Windows PowerShell 5.1, .NET Framework 4.7.2+ (WPF)
+    Launch  : Start-PictureHouse.cmd  (or: powershell -STA -ExecutionPolicy Bypass -File src\Picture-House.ps1)
 
-    Everything the app writes lives in the "Data" folder beside this script, so the
-    whole folder can be moved. The films themselves stay on the NAS and are only read
+    Everything the app writes (settings and API keys, the film list, your watched history,
+    the artwork cache, logs and backups) lives in %APPDATA%\Picture House, never in the
+    repo or beside the exe. The films themselves stay on the NAS and are only read
     (the one exception is "Move to shelf", which you confirm each time).
 #>
 
@@ -259,7 +261,7 @@ $ComboStyles = @'
 '@
 
 $AppName    = 'Picture House'
-$AppVersion = '1.3.1'
+$AppVersion = '1.00'   # <major>.<two-digit minor>; matches CHANGELOG.md and the exe name
 
 # ---- WPF needs an STA thread -------------------------------------------------------
 if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
@@ -333,14 +335,13 @@ try {
 function Close-Splash { if ($Script:Splash) { try { $Script:Splash.Close() } catch {}; $Script:Splash = $null } }
 
 # ---- Folders ------------------------------------------------------------------------
+# $Base is where the script (or exe) is. Picture House's own data lives in %APPDATA%\Picture House,
+# so updating the script, rebuilding the exe or committing the repo can never touch it.
 $Base = $PSScriptRoot
 if (-not $Base) { $Base = Split-Path -Parent ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) }
-$DataDir  = Join-Path $Base 'Data'
+$DataDir  = Join-Path ([Environment]::GetFolderPath('ApplicationData')) $AppName
 $CacheDir = Join-Path $DataDir 'Cache'
-foreach ($d in @($DataDir, $CacheDir, (Join-Path $CacheDir 'posters'), (Join-Path $CacheDir 'thumbs'),
-                 (Join-Path $CacheDir 'backdrops'), (Join-Path $DataDir 'Exports'))) {
-    if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) }
-}
+if (-not (Test-Path -LiteralPath $DataDir)) { [void](New-Item -ItemType Directory -Path $DataDir -Force) }
 $Files = @{
     Settings = Join-Path $DataDir 'settings.json'
     Library  = Join-Path $DataDir 'library.json'
@@ -362,9 +363,46 @@ function Stop-Startup([string]$why) {
     # something stopped the window from being built — say so instead of vanishing
     Write-Log "Could not open: $why"
     Close-Splash
-    [void][Windows.MessageBox]::Show("Picture House couldn't open.`n`n$why`n`nThe details are in Data\picture-house.log.", 'Picture House', 'OK', 'Error')
+    [void][Windows.MessageBox]::Show("Picture House couldn't open.`n`n$why`n`nThe details are in $($Files.Log)", 'Picture House', 'OK', 'Error')
     exit 1
 }
+# ---- One-time move from the old "Data" folder beside the script (Picture House 1.3.x and earlier) ----
+# Looks beside the script/exe and one folder up (the old repo root, when the script is now in src\).
+# The old folder is copied, never deleted, then renamed "Data (moved to AppData)" so it's only used once.
+# settings.json is copied last, so a move that stops half-way is simply tried again next time.
+function Move-OldDataFolder {
+    if (Test-Path -LiteralPath (Join-Path $DataDir 'settings.json')) { return }
+    $old = $null
+    foreach ($cand in @((Join-Path $Base 'Data'), (Join-Path (Split-Path -Parent $Base) 'Data'))) {
+        if (Test-Path -LiteralPath (Join-Path $cand 'settings.json')) { $old = $cand; break }
+    }
+    if (-not $old) { return }
+    Write-Log "Moving data from $old to $DataDir…"
+    if ($Script:Splash) {
+        try { $Script:Splash.Content.Children[1].Text = 'Moving your data to its new home…'; $Script:Splash.Dispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::Background) } catch {}
+    }
+    try {
+        $items = @(Get-ChildItem -LiteralPath $old -Force | Sort-Object { $_.Name -eq 'settings.json' })
+        foreach ($item in $items) {
+            $dest = Join-Path $DataDir $item.Name
+            if (-not (Test-Path -LiteralPath $dest)) { Copy-Item -LiteralPath $item.FullName -Destination $dest -Recurse -Force -ErrorAction Stop }
+        }
+        $newName = 'Data (moved to AppData)'
+        if (-not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $old) $newName))) {
+            try { Rename-Item -LiteralPath $old -NewName $newName -ErrorAction Stop } catch { Write-Log "Couldn't rename the old Data folder: $($_.Exception.Message)" }
+        }
+        Write-Log 'Data moved.'
+    } catch {
+        Write-Log "Moving the old Data folder stopped: $($_.Exception.Message)"
+        [void][Windows.MessageBox]::Show("Picture House couldn't finish moving your data from`n$old`nto`n$DataDir`n`n$($_.Exception.Message)`n`nNothing has been deleted. It will try again next time, or you can copy the files across yourself.", $AppName, 'OK', 'Warning')
+    }
+}
+Move-OldDataFolder
+foreach ($d in @($CacheDir, (Join-Path $CacheDir 'posters'), (Join-Path $CacheDir 'thumbs'),
+                 (Join-Path $CacheDir 'backdrops'), (Join-Path $DataDir 'Exports'))) {
+    if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) }
+}
+
 Write-Log "Opening Picture House $AppVersion (process $PID)…"
 # tidy the Data folder: files older versions used, and keep the launch log short
 foreach ($old in 'people-depts.json', 'console.log') { $f = Join-Path $DataDir $old; if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue } }
@@ -2099,7 +2137,7 @@ $XamlText = @'
                     <WrapPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
                       <Button x:Name="btnOpenData" Style="{StaticResource BtnGhost}" Content="Open data folder" Margin="0,0,8,0"/>
                     </WrapPanel>
-                    <TextBlock Text="Everything Picture House stores lives in the Data folder beside the app." Foreground="{StaticResource Muted}" TextWrapping="Wrap" LineHeight="19"/>
+                    <TextBlock Text="Everything Picture House stores lives in %APPDATA%\Picture House on this PC, never beside the app, so updates and rebuilds can't touch it." Foreground="{StaticResource Muted}" TextWrapping="Wrap" LineHeight="19"/>
                   </DockPanel>
                 </Border>
               </UniformGrid>
@@ -2475,14 +2513,15 @@ foreach ($n in $Xaml.SelectNodes('//*[@*[local-name()="Name"]]')) {
 }
 $Window.Title = "$AppName  ·  v$AppVersion"
 if ($Script:AppIcon) { $Window.Icon = $Script:AppIcon }   # taskbar and title-bar icon instead of PowerShell's
-$icoPath = Join-Path $Base 'Picture House.ico'
+# a copy of the icon in the data folder, for shortcuts (never written into the repo or Builds)
+$icoPath = Join-Path $DataDir 'Picture House.ico'
 if (-not (Test-Path -LiteralPath $icoPath)) { Save-AppIcon $icoPath }
 
 $Window.Dispatcher.Add_UnhandledException({
     param($s, $e)
     Write-Log ("UI error: " + $e.Exception.ToString())
     $e.Handled = $true
-    try { $UI.txtStatus.Text = 'Something went wrong — details are in Data\picture-house.log' } catch {}
+    try { $UI.txtStatus.Text = 'Something went wrong — details are in the log (Utilities → Open the log)' } catch {}
 })
 
 # =====================================================================================
@@ -4241,10 +4280,23 @@ function Move-FilmToShelf([string]$key, $shelf) {
             $oldFile = [string]$rec['Path']; $dir = [IO.Path]::GetDirectoryName($oldFile)
             $base = [IO.Path]::GetFileNameWithoutExtension($oldFile)
             $parts = @($rec['PartFiles'] | Where-Object { $_ })
-            $sidecars = @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -eq $base -or $_.Name.StartsWith($base + '.') -or $_.Name.StartsWith($base + '-') } | ForEach-Object { $_.FullName })
+            # extras that belong to this film (subtitles, .nfo, poster…) — never another video file, so a film named
+            # without a year ("Airplane") can't take "Airplane.II.1982.mkv" with it
+            $videoExt = @(([string]$Settings.Extensions) -split '[\s,;]+' | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() })
+            $oc = [StringComparison]::OrdinalIgnoreCase
+            $sidecars = @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue |
+                Where-Object { ($_.BaseName -eq $base -or $_.Name.StartsWith($base + '.', $oc) -or $_.Name.StartsWith($base + '-', $oc)) -and ($videoExt -notcontains $_.Extension.ToLowerInvariant()) } |
+                ForEach-Object { $_.FullName })
             $all = @(($parts + $sidecars + $oldFile) | Where-Object { $_ } | Select-Object -Unique)
             foreach ($f in $all) { if (Test-Path -LiteralPath (Join-Path $target ([IO.Path]::GetFileName($f)))) { Tell "A file called $([IO.Path]::GetFileName($f)) is already on that shelf." 'Warning'; return } }
-            foreach ($f in $all) { [IO.File]::Move($f, (Join-Path $target ([IO.Path]::GetFileName($f)))) }
+            $moved = New-Object Collections.ArrayList
+            try {
+                foreach ($f in $all) { $to = Join-Path $target ([IO.Path]::GetFileName($f)); [IO.File]::Move($f, $to); [void]$moved.Add(@($f, $to)) }
+            } catch {
+                # put back whatever already moved, so the film isn't left split across two shelves
+                foreach ($mv in $moved) { try { [IO.File]::Move($mv[1], $mv[0]) } catch { Write-Log "Couldn't move back $($mv[1]): $($_.Exception.Message)" } }
+                throw
+            }
             $oldPrefix = $dir; $newPrefix = $target
         }
     } catch { Tell ("The move didn't work:`n" + $_.Exception.Message) 'Warning'; return }
@@ -5189,7 +5241,7 @@ function Show-Person([string]$name, [string]$kind = '') {
 }
 
 # =====================================================================================
-#  Person details from TMDb (photo, biography, other films) — cached in Data\people.json
+#  Person details from TMDb (photo, biography, other films) — cached in people.json in the data folder
 # =====================================================================================
 $Files.People = Join-Path $DataDir 'people.json'
 $Script:PeopleCache = @{}
@@ -6124,7 +6176,7 @@ function Clear-AllData {
     $Window.Cursor = [Windows.Input.Cursors]::Wait
     try {
         Hide-BigPoster
-        # Picture House's own data files only — never anything outside the Data folder
+        # Picture House's own data files only — never anything outside the data folder
         $keep = @('settings.json', 'settings.json.bak', 'picture-house.log', 'picture-house.log.old', 'launch.log')
         Get-ChildItem -LiteralPath $DataDir -File -ErrorAction SilentlyContinue | Where-Object { $keep -notcontains $_.Name } |
             ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
@@ -6333,188 +6385,26 @@ function Find-ZoomPlayer {
 $AboutText = @"
 Picture House $AppVersion — a film library for the shelves on your NAS.
 
-New in 1.3.1
-•  Restore from backup (Utilities): choose a backup and see what's in it — films, watched, rated, notes — next to what you have now, tick which parts to put back, and Picture House restarts with it. Your data as it was is saved first in Data\Backups, so you can always go back.
-•  Move to my other PC (Utilities): Send to my other PC makes one file with your watched history, ratings, notes, favourites, watchlist and settings (keys and film list optional). Bring in… on the other PC merges it — a film watched on either PC stays watched, and nothing on that PC is lost. Window size and other per-PC settings stay put.
-•  Printable list (Utilities): a tidy page of one shelf or the whole collection — choose all, not watched, watched, watchlist or favourites, how to sort, what each line shows, grouped by shelf, in two columns, with tick boxes. It opens in your browser to print or save as a PDF.
-•  Utilities is tidied into Export, Library, Your data and Housekeeping.
-•  Build-PictureHouseExe.cmd makes Picture House.exe with the Picture House icon (every size from 16 to 256 px). It checks first that the PC has everything the build needs and says what to do if not, keeps your old exe if anything goes wrong, and can add a desktop shortcut.
+New in 1.00 (7 November 2026)
+•  Version numbers start again at 1.00 for the first release on GitHub, and now match the exe name (Picture House v1.00.exe).
+•  Your data has moved to %APPDATA%\Picture House. The old Data folder beside the app is copied across automatically the first time and renamed "Data (moved to AppData)" — nothing is deleted.
+•  Move to shelf with a loose file now only takes that film's own extras (subtitles, .nfo, artwork). Before, a film named without a year (e.g. Airplane) could take another film that starts with the same name (Airplane.II.1982.mkv) with it. If a move fails half-way, the files already moved are put back.
+•  The About window shows the copyright and MIT licence.
+•  Restart after a restore or import finds Start-PictureHouse.cmd in the new folder layout.
+•  Messages and help now say where the data folder is, instead of "Data\…".
 
-New in 1.3.0
-•  Its own icon: a teal film-strip tile with a cream "P" on the taskbar and title bar (instead of PowerShell's), saved as Picture House.ico for shortcuts too.
-•  A new About button (next to Settings) with the version and credits; this list is now called Version history.
-•  Smoother and tidier: talking to Radarr and Seerr now happens in the background (no more frozen window while they answer), the film panel keeps Play / Watched / Favourite / Watchlist up front with everything else under More ▾ (and every right-click menu now has the app's cream, rounded look), and the pop-up windows (Add to Radarr, Choose a copy, Fix match) match the app — teal header, red and cream buttons.
-•  Tidier: easier-to-read text under the posters, the film panel closes when you open Stats or Upgrades, Year in review shows a simple message until you've watched something, and Health points to Upgrades for SD copies and duplicates.
-•  Import it anyway: Picture House follows every copy you pick until Radarr swaps it in ("Your picks" on the Upgrades page). If Radarr downloads it but holds it back — e.g. "not an upgrade" — a card pops up with one button to import that file anyway. Your Radarr settings are never changed.
-•  Choose a copy: on the Upgrades page (and when you add a film to Radarr) you now pick the download yourself — every English-language copy your indexers have, with its size, quality, seeders and age, sortable and filterable by maximum size. Radarr only downloads the one you choose, and Picture House tells you when it reaches your download client.
-•  You can see what Radarr and Seerr did: a card pops up bottom-right when you add a film, request it or search for a better copy, and Picture House keeps an eye on Radarr afterwards — "Radarr found a 1080p copy… downloading now" or "nothing better yet". The Upgrades list shows the latest news on each film too.
-•  People: how complete are you? Every director and actor shows "You have 6 of the 14 films they directed" with a progress bar, the list shows "6 of 14" under each name, and Sort → Most complete puts the ones you're closest to finishing first.
-•  Award winners: a new shelf in the rail for your Oscar, BAFTA and Golden Globe winners and nominees (grouped), the awards listed in the film panel, and two new lists in Collections — every Oscar Best Picture and BAFTA Best Film winner, with the ones you're missing ready for Radarr or Seerr. From Wikidata, free and automatic.
-•  Upgrades & duplicates: a new tab listing copies below 1080p or 4K and films you have twice, with what Radarr's quality profile thinks of each. Nothing is automatic — "Search for a better copy" asks first and only searches for that one film.
-•  Stats → Year in review: your year in film — films watched, hours, favourite shelf and genre, busiest month, longest sit, your top rated, faces you saw most and every film in order. Export it as a web page to share.
-
-New in 1.2.34
-•  Tooltips have a new look — a dark teal card with cream text, to match the app. Coming soon films show a tidy card: title, cinema / digital / disc dates, the shelf it will land on and the story.
-•  Coming soon: the posters no longer have COMING SOON / IN CINEMAS labels over them — the page title and the dates under each poster say it already.
-•  Search: people whose name matches (e.g. "helen") now appear in a strip above the films, with photo, actor or director and how many of your films they're in. Click one to open their page.
-•  The search box: what you type now starts exactly where the grey "Search titles, people, genres…" hint sits, instead of halfway along it.
-•  People no longer freezes for a few seconds the first time you open it — sorting actors from producers now uses a small index file, built in the background if it's missing.
-•  Opening: a small "Opening your film library…" card shows straight away so you know it's on its way, the window comes to the front when it's ready, and if something stops it opening you get a message instead of nothing.
-
-New in 1.2.33
-•  People → Actors only lists actors and directors. Producers, writers and other crew who happen to have a small part in a film (TMDb says what each person is mainly known for) are left out.
-
-New in 1.2.32
-•  Tonight's Pick: the dice looks like a proper cube again (less fish-eye), the pick sits in the middle of the stage with a bigger poster, and the small captions are easier to read.
-•  Tonight's Pick: the films-in-the-hat count is now a big red number in the middle of the header.
-•  Tonight's Pick: a Reset choices button (under the chips) puts shelf, length, era and "from" back to the start (and lets skipped films back in the hat).
-
-New in 1.2.31
-•  Tonight's Pick: a bigger dice, and the films-in-the-hat count is now a bold badge so it's easy to see.
-
-New in 1.2.30
-•  Tonight's Pick redesigned: click the 3D dice to roll for a film. One-click chips for shelf, length, era and where from (unwatched, watchlist, favourites or anything), a live count of films in the hat, and three "Or maybe" runners-up you can swap in. Rolling again skips the last pick.
-
-New in 1.2.29
-•  Tonight's Pick: the genre filter has gone — pick by shelf, decade, running time and rating instead.
-
-New in 1.2.28
-•  People: cast and crew details (photo, biography, birth date, other films) are now fetched automatically in the background — most-seen people first — so clicking someone shows their details straight away. Runs after film info is fetched and at start-up, refreshes every 90 days, and stops with Cancel.
-
-New in 1.2.27
-•  Settings → Start again: two separate buttons. Clear all data: wipes Picture House's stored data (film list, info, posters, your watched history and ratings) as if no scan had been done (settings kept, offers a backup first). Clear settings: resets every setting to first-run (your films, info and watched history kept). Nothing on the NAS is touched by either.
-
-New in 1.2.26
-•  Web catalogue: the film pop-up has proper buttons — TMDb ↗, Trailer ↗ and Close — instead of a plain link.
-
-New in 1.2.25
-•  New Utilities tab: exports (web catalogue, CSV, health report), Refresh all film info, show hidden shelves, open the log, open the data folder — and Back up my data, which saves your watched history, ratings, notes and settings to one .zip.
-
-New in 1.2.24
-•  Stats: the top lists sit four across on a wide screen, and their bars fill the card so the numbers sit next to them.
-
-New in 1.2.23
-•  People lists every actor, not just those in two or more of your films.
-
-New in 1.2.22
-•  Collections and People: the film title no longer shows through faded posters like a watermark — it only appears when there's no poster at all.
-
-New in 1.2.21
-•  Collections are checked against TMDb automatically — at start-up, after new film info is fetched and when you open the tab (anything not checked for a week). ‘Check TMDb’ still forces a full refresh.
-
-New in 1.2.20
-•  People → Directors now lists every director (the ‘2 or more films’ filter only applies to actors).
-
-New in 1.2.19
-•  The empty ‘Choose a film’ panel no longer flashes up on the right when Picture House opens.
-
-New in 1.2.18
-•  People: tidier ‘More films’ (no ‘not owned’ tags; buttons on one row), biographies without pronunciation guides, and the status bar no longer gets stuck on ‘Getting details…’.
-
-New in 1.2.17
-•  People: clicking a cast member or director fetches their profile from TMDb — photo, biography, birth date and place, links — plus the other films of theirs you don't have yet, with + Radarr / Seerr buttons.
-
-New in 1.2.16
-•  Click the poster in the film panel to see it big — the sharpest copy available (your NAS poster, or TMDb's full-resolution one).
-
-New in 1.2.15
-•  Slim beige scrollbars throughout (no grey bar or arrow buttons); they widen a little when you hover over them.
-•  Dropdown lists open taller, so most fit without scrolling.
-
-New in 1.2.14
-•  Removed the quality tag (1080p / 720p / SD) from the corner of each poster.
-
-New in 1.2.13
-•  Easier-to-see progress: while scanning or fetching, the status bar shows a pill with what's running, a larger progress bar, the percentage and a Cancel button.
-
-New in 1.2.12
-•  MKV files: picture quality is now read straight from the MKV itself (Windows can't read MKV details on its own).
-
-New in 1.2.11
-•  Picture quality (4K / 1080p / 720p / SD) is now read from each video file itself during a scan, so the quality filter, Stats and Health know every film's real resolution. Results are remembered, so later scans only check new films.
-•  Library growth chart: month labels no longer overlap at the right-hand end.
-
-New in 1.2.10
-•  Fixed: Stats charts didn't appear on Windows PowerShell 5.1.
-•  Fixed: the bars in the Stats top lists didn't show — only the numbers.
-•  Each chart is drawn on its own, so one problem can't blank the others (and any problem is logged in detail).
-
-New in 1.2.8
-•  New dropdowns everywhere: rounded cream pills that open a soft list with a tick on the current choice. Filter dropdowns turn teal while a filter is in use.
-
-New in 1.2.7
-•  The quality profile list stays put (even after a restart) — it only refreshes when you press ‘Load quality profiles’.
-
-New in 1.2.6
-•  No more Root folder setting: when you send a film to Radarr, the box lists Radarr's folders (with free space) and you choose the genre folder each time.
-
-New in 1.2.5
-•  Removed the Display setting — Picture House simply opens maximised at normal size.
-
-New in 1.2.4
-•  Settings is laid out in columns — your library, online services and version info side by side on wide screens (two columns on smaller ones) — with the Save buttons at the top.
-•  The header above the posters refreshes once film info has been fetched.
-
-New in 1.2.2
-•  The film panel stays out of the way until you click a poster, so the wall uses the full width.
-•  Poster rows now stretch to fill the width — no gap at the right.
-•  ‘Hours of film’ only shows once running times are known, with correct wording.
-•  The film-panel button (top right) now shows a proper icon.
-•  The Seerr folder on the NAS is ignored (Settings → Folders to ignore).
-
-New in 1.2.1
-•  Graphics back to their normal size — still opens maximised. Settings → Display (or Ctrl + / Ctrl −) can still make everything bigger or smaller if you ever want it.
-
-New in 1.2.0
-•  Opens maximised.
-•  Stats uses three chart columns when there's room.
-
-New in 1.1.0
-•  Stats now has proper charts: a shelves donut, progress rings (watched, film info, HD, posters), films by decade, library growth over two years, TMDb ratings, running times, watched shelf-by-shelf and a picture-quality donut. Hover for numbers; click a slice, column or bar to jump to those films.
-
-New in 1.0.10
-•  Folders to ignore (Settings): ‘Intros’ is skipped everywhere — never a shelf, film, Health item or export. Add more names, separated by commas.
-
-New in 1.0.9
-•  Health: “Export HTML report” — a searchable web page of every issue, grouped with counts, ready to print.
-
-New in 1.0.8
-•  Always opens on All films in the Library.
-
-New in 1.0.7
-•  Coming soon: films Radarr is waiting for that aren't out yet, with cinema / digital / disc dates and a countdown, grouped by month.
-•  Health no longer flags the empty folders Radarr makes for unreleased films. Once a film's release date has passed and it still hasn't arrived, it shows as ‘Released — still missing’.
-
-New in 1.0.6
-•  Opens much bigger — about 92% of the screen, centred (not full screen). If you resize it, your size is remembered.
-
-New in 1.0.5
-•  “Test Radarr” button: checks the address and key, and shows Radarr's version, root folders with free space, and any health warnings.
-
-New in 1.0.4
-•  “Get a free API key” button beside the TMDb key.
-•  Seerr: a Test button, and an optional Seerr API key — with it, the Seerr button on missing collection films sends the request straight to Seerr.
-
-New in 1.0.3
-•  Fixed “Cannot convert System.Object[] to System.Int32” when connecting to Radarr on Windows PowerShell 5.1.
-
-New in 1.0.2
-•  Radarr connection is more forgiving: the address is tidied up automatically (missing http://, stray double dots, pasted page paths), it warns when the port belongs to another app such as Deluge, and errors now show the address tried, the reply, and what to check.
-
-New in 1.0.1
-•  Every genre shelf has its own fixed colour (Action red, Horror blood red, Sci-Fi cyan, Mum rose…) — no two shelves share one.
+Earlier versions (1.0.0 to 1.3.1) are listed in docs\HISTORY-before-1.00.md in the repository.
 
 What's in Picture House
 •  Shelves come straight from your NAS folders, including sub-shelves, DVD/Blu-ray folder rips, ISOs and CD1/CD2 films.
 •  Poster wall that stays quick with thousands of films; group by shelf, decade, letter or genre; or switch to a sortable list.
 •  Film info from .nfo files already on the NAS, or from TMDb — posters, backdrops, cast, crew, certificates, trailers.
 •  Watched, favourites, watchlist, star ratings, notes and play history (kept on this PC, not the NAS).
-•  Collections: see which films in a series you own, which are missing, and send them to Radarr or Seerr.
-•  Tonight's Pick: a spinning reel that chooses a film for you, filtered by shelf, mood, length and rating.
-•  People: browse by actor or director across your whole library.
-•  Health checks: naming problems, missing artwork, duplicates, upgrade candidates and a Radarr comparison.
-•  Stats, a CSV export and a self-contained web catalogue you can open on any device.
-•  Move a film to another shelf (folder) from inside the app.
+•  Collections: see which films in a series you own, which are missing, and send them to Radarr or Seerr. Also every Oscar Best Picture and BAFTA Best Film winner.
+•  Tonight's Pick: roll a 3D dice for a film, narrowed by shelf, length, era and where from, with three runners-up.
+•  People: browse by actor or director, with how complete your collection of each person's films is.
+•  Coming soon, Award winners, Health checks, Upgrades & duplicates (you choose the copy) and Stats with Year in review.
+•  Utilities: web catalogue, printable list, CSV and health report exports; back up and restore; move your data to another PC.
 
 Data folder: $DataDir
 "@
@@ -6684,7 +6574,7 @@ function Write-ChartError([string]$name, $err) {
     Write-Log ("Chart '$name' failed: " + $err.Exception.Message + "`n" + $pos + "`n" + $st)
     $note = "<Border $XNS Background=""#FFFCF6"" BorderBrush=""#E2D9C9"" BorderThickness=""1"" CornerRadius=""10"" Padding=""18,16"" Margin=""0,0,14,14""><StackPanel>" +
             "<TextBlock Text=""$(X $name)"" FontFamily=""Georgia"" FontSize=""19""/>" +
-            "<TextBlock Text=""Couldn't draw this chart — details are in Data\picture-house.log"" Foreground=""#7B7266"" FontStyle=""Italic"" Margin=""0,6,0,0""/></StackPanel></Border>"
+            "<TextBlock Text=""Couldn't draw this chart — details are in the log (Utilities → Open the log)"" Foreground=""#7B7266"" FontStyle=""Italic"" Margin=""0,6,0,0""/></StackPanel></Border>"
     try { [void]$UI.ugCharts.Children.Add([Windows.Markup.XamlReader]::Parse($note)) } catch {}
 }
 
@@ -7229,7 +7119,7 @@ $AboutDialogXaml = @'
       <TextBlock Text="CREDITS" FontSize="10.5" FontWeight="Bold" Foreground="#7B7266" Margin="0,18,0,8"/>
       <Grid>
         <Grid.ColumnDefinitions><ColumnDefinition Width="130"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <TextBlock Text="Created by" Foreground="#7B7266" Margin="0,0,0,8"/>
         <TextBlock Grid.Column="1" Text="Jason Rhodes" FontWeight="SemiBold" Margin="0,0,0,8"/>
         <TextBlock Grid.Row="1" Text="Built with" Foreground="#7B7266" Margin="0,0,0,8"/>
@@ -7245,8 +7135,10 @@ $AboutDialogXaml = @'
         <TextBlock Grid.Row="4" Grid.Column="1" TextWrapping="Wrap" Margin="0,0,0,8" Text="Radarr and Seerr for finding and downloading films; Zoom Player (or your own player) for watching them."/>
         <TextBlock Grid.Row="5" Text="Made with" Foreground="#7B7266" Margin="0,0,0,8"/>
         <TextBlock Grid.Row="5" Grid.Column="1" TextWrapping="Wrap" Margin="0,0,0,8" Text="Windows PowerShell and WPF, Georgia and Segoe UI type, Segoe Fluent Icons."/>
-        <TextBlock Grid.Row="6" Text="Your data" Foreground="#7B7266"/>
-        <TextBlock Grid.Row="6" Grid.Column="1" TextWrapping="Wrap" x:Name="aData"/>
+        <TextBlock Grid.Row="6" Text="Your data" Foreground="#7B7266" Margin="0,0,0,8"/>
+        <TextBlock Grid.Row="6" Grid.Column="1" TextWrapping="Wrap" x:Name="aData" Margin="0,0,0,8"/>
+        <TextBlock Grid.Row="7" Text="Licence" Foreground="#7B7266"/>
+        <TextBlock Grid.Row="7" Grid.Column="1" TextWrapping="Wrap" Text="MIT licence  ·  Copyright (c) 2026 Jason Rhodes"/>
       </Grid>
       <WrapPanel Margin="0,16,0,0">
         <Button x:Name="aTmdb" Content="TMDb ↗" Style="{StaticResource PHDlgGhost}" Margin="0,0,6,6"/>
@@ -7277,7 +7169,7 @@ function Show-About {
 
 # =====================================================================================
 #  Utilities (1.3.1): Restore from backup, Move to my other PC, Printable list
-#  Everything here works on Picture House's own Data folder — never on the NAS.
+#  Everything here works on Picture House's own data folder — never on the NAS.
 # =====================================================================================
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 $Script:DataFileInfo = [ordered]@{
@@ -7384,9 +7276,10 @@ function Restart-PictureHouse {
 function Start-PictureHouseAgain {
     try {
         $self = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-        $cmd = Join-Path $Base 'Start-PictureHouse.cmd'
-        if ($self -notmatch '(?i)\\(powershell|pwsh|powershell_ise)\.exe$') { Start-Process -FilePath $self }          # Picture House.exe
-        elseif (Test-Path -LiteralPath $cmd) { Start-Process -FilePath $cmd -WindowStyle Hidden }
+        $cmd = @((Join-Path $Base 'Start-PictureHouse.cmd'), (Join-Path (Split-Path -Parent $Base) 'Start-PictureHouse.cmd')) |
+            Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        if ($self -notmatch '(?i)\\(powershell|pwsh|powershell_ise)\.exe$') { Start-Process -FilePath $self }          # Picture House v1.xx.exe
+        elseif ($cmd) { Start-Process -FilePath $cmd -WindowStyle Hidden }
         else {
             $ps1 = Join-Path $Base 'Picture-House.ps1'
             Start-Process -FilePath $self -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', "`"$ps1`"")
@@ -7484,7 +7377,7 @@ function Restore-PictureHouse {
     <TextBlock Text="Put back" Foreground="#7B7266" Margin="0,8,0,0"/>
     <StackPanel x:Name="uParts" Margin="0,0,0,4"/>
     <TextBlock Foreground="#7B7266" FontSize="12" TextWrapping="Wrap" Margin="0,10,0,0"
-               Text="Your data as it is now is saved first (Data\Backups), so you can go back. Picture House then restarts to load the backup. Nothing on the NAS is touched."/>
+               Text="Your data as it is now is saved first (in Backups, in the data folder), so you can go back. Picture House then restarts to load the backup. Nothing on the NAS is touched."/>
 '@ 'Restore and restart'
         $dw.FindName('uFile').Text = [IO.Path]::GetFileName($zipPath)
         $dw.FindName('uWhen').Text = 'Backup made ' + $made.ToString('dddd d MMMM yyyy, HH:mm') + '  ·  ' + (Format-Size ((Get-Item -LiteralPath $zipPath).Length))
@@ -7509,7 +7402,7 @@ function Restore-PictureHouse {
             Write-Log ("Restored from backup $zipPath : " + ($pick -join ', '))
         } catch { $Window.Cursor = $null; Tell ("The restore didn't finish:`n" + $_.Exception.Message + "`n`nYour data from before is in:`n" + $safe) 'Warning'; return }
         $Window.Cursor = $null
-        Tell ("Backup restored.`n`nPicture House will now restart to load it.`n`nIf you change your mind, your data from before is saved in Data\Backups:`n" + [IO.Path]::GetFileName($safe))
+        Tell ("Backup restored.`n`nPicture House will now restart to load it.`n`nIf you change your mind, your data from before is saved in:`n" + (Join-Path $DataDir 'Backups') + "`n" + [IO.Path]::GetFileName($safe))
         Restart-PictureHouse
     } finally { Remove-TempFolder $tmp }
 }
@@ -7632,7 +7525,7 @@ function Import-FromOtherPc {
     <CheckBox x:Name="uKeys" Content="API keys (TMDb, Radarr, Seerr)"/>
     <CheckBox x:Name="uLib" Content="Film list and film info (replaces this PC's)"/>
     <TextBlock Foreground="#7B7266" FontSize="12" TextWrapping="Wrap" Margin="0,10,0,0"
-               Text="Nothing you've done on this PC is lost: a film watched on either PC stays watched, and your data as it is now is saved first (Data\Backups). Picture House then restarts. Nothing on the NAS is touched."/>
+               Text="Nothing you've done on this PC is lost: a film watched on either PC stays watched, and your data as it is now is saved first (in Backups, in the data folder). Picture House then restarts. Nothing on the NAS is touched."/>
 '@ 'Bring in and restart'
         $dw.FindName('uFrom').Text = $(if ($from) { "From $from" } else { 'From your other PC' })
         $dw.FindName('uWhen').Text = $(if ($made -gt [datetime]::MinValue) { 'Made ' + $made.ToString('dddd d MMMM yyyy, HH:mm') } else { '' })
@@ -7680,7 +7573,7 @@ function Import-FromOtherPc {
                 }
             }
             Write-Log ("Brought in from $from ($zipPath): " + (@($(if ($doUser) { 'watched history' }), $(if ($doSet) { 'settings' }), $(if ($doKeys) { 'keys' }), $(if ($doLib) { 'film list' })) | Where-Object { $_ }) -join ', ')
-        } catch { $Window.Cursor = $null; Tell ("That didn't finish:`n" + $_.Exception.Message + "`n`nYour data from before is in Data\Backups.") 'Warning'; return }
+        } catch { $Window.Cursor = $null; Tell ("That didn't finish:`n" + $_.Exception.Message + "`n`nYour data from before is in:`n" + (Join-Path $DataDir 'Backups')) 'Warning'; return }
         $Window.Cursor = $null
         Tell "Done.`n`nPicture House will now restart to load what you brought in."
         Restart-PictureHouse
@@ -8326,7 +8219,7 @@ COMING SOON
 • Appears in the rail once Radarr is set up: films Radarr is waiting for that aren't out yet, grouped by month,
   with their cinema / digital / disc dates and a countdown. Double-click one to open it in Radarr.
 • The dates under each poster say whether it's in cinemas yet; hover for cinema, digital and disc dates.
-• Folders named in Settings → Folders to ignore (Intros by default) are skipped everywhere.
+• Folders named in Settings → Folders to ignore (Intros and Seerr by default) are skipped everywhere.
 • Their empty folders on the NAS are not counted as problems. Once a release date passes and the film still hasn't
   arrived, Health lists it as "Released — still missing".
 
@@ -8364,7 +8257,7 @@ UTILITIES
   how to sort and what each line shows. It opens in your browser — press Print, or choose Save as PDF.
 • Back up my data saves your watched history, ratings, notes, settings and film info to one .zip.
 • Restore from backup: choose a backup, compare it with what you have now, tick the parts to put back. Your current
-  data is saved to Data\Backups first, then Picture House restarts with the backup.
+  data is saved to the Backups folder first, then Picture House restarts with the backup.
 • Move to my other PC: "Send to my other PC…" makes one file (watched history, ratings, notes, settings; keys and
   film list optional). On the other PC press "Bring in…" — it merges, so a film watched on either PC stays watched.
   Window size and other per-PC settings aren't copied, and a video player that isn't installed there is skipped.
@@ -8376,7 +8269,7 @@ ABOUT AND VERSION HISTORY
 
 OPENING
 • A small "Opening your film library…" card appears while Picture House loads — give it a few seconds rather than starting it again.
-• If something stops it opening you'll get a message, and the reason is written to Data\picture-house.log.
+• If something stops it opening you'll get a message, and the reason is written to picture-house.log in the data folder.
 
 START AGAIN
 • Settings → Clear all data wipes what Picture House has stored (it offers a backup first) — your settings stay.
@@ -8385,7 +8278,8 @@ START AGAIN
 • Neither ever deletes films or folders on the NAS.
 
 WHERE THINGS LIVE
-Everything the app stores (settings, cached posters, your ratings) is in the Data folder beside the script.
+Everything the app stores (settings and keys, cached posters, your ratings, logs and backups) is in
+%APPDATA%\Picture House — Utilities → Open data folder takes you there. Nothing is kept beside the app.
 The NAS is only read — apart from "Move to shelf".
 '@
 $UI.btnHelp.Add_Click({

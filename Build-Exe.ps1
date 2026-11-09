@@ -1,29 +1,34 @@
-<#
-    Build-PictureHouseExe.ps1
-    Builds "Picture House.exe" from Picture-House.ps1, with the Picture House icon.
+﻿<#
+    Build-Exe.ps1  (started by Build-Exe.cmd)
+    Builds "..\Builds\Picture House v<version>.exe" from src\Picture-House.ps1, with the Picture House icon,
+    e.g. "Picture House v1.00.exe". Builds sit outside the repo (Source\) so they're never committed.
 
-    1. Checks this PC has everything the build needs (and says what to do if not).
-    2. Makes "Picture House.ico" from the same drawing the app uses, so the exe, taskbar and title bar all match.
+    1. Checks this PC has everything the build needs (and says what to do if not), including that
+       $AppVersion in the script has a matching entry in CHANGELOG.md.
+    2. Uses assets\Picture-House.ico. -RedrawIcon remakes it first from New-AppIcon in the script, so the
+       exe, taskbar and title bar match (only needed if the drawing changes).
     3. Builds the exe with PS2EXE (free, from the PowerShell Gallery). The exe has no console window.
 
-    Run it again whenever Picture-House.ps1 is updated. Your Data folder is never touched.
-    The exe keeps using the Data folder beside it, so your library, settings and watched history carry on as before.
+    Interim: once E:\Created\_shared\Build-Tool.ps1 is in place it replaces this file (it reads build.json).
+    Your data in %APPDATA%\Picture House is never touched.
 #>
-param([switch]$NoPause)
+param([switch]$NoPause, [switch]$RedrawIcon)
 
 $ErrorActionPreference = 'Stop'
 $here    = Split-Path -Parent $MyInvocation.MyCommand.Path
-$src     = Join-Path $here 'Picture-House.ps1'
-$exe     = Join-Path $here 'Picture House.exe'
-$ico     = Join-Path $here 'Picture House.ico'
-$logFile = Join-Path $here 'Build-PictureHouseExe.log'
+$src       = Join-Path $here 'src\Picture-House.ps1'
+$ico       = Join-Path $here 'assets\Picture-House.ico'
+$changelog = Join-Path $here 'CHANGELOG.md'
+$buildsDir = Join-Path (Split-Path -Parent $here) 'Builds'
+$exe       = $null   # "Picture House v<version>.exe" in $buildsDir, set once the version is known
+$logFile   = Join-Path $here 'Build-Exe.log'
 
 # ---- WPF (used to draw the icon) needs Windows PowerShell 5.1 on an STA thread ----
 if ($PSVersionTable.PSEdition -eq 'Core' -or [Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
     $wps = $(if ($env:SystemRoot) { Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe' } else { '' })
     if ($wps -and (Test-Path -LiteralPath $wps)) {
         Write-Host 'Switching to Windows PowerShell 5.1 (needed for the build)...'
-        & $wps -NoProfile -ExecutionPolicy Bypass -STA -File $MyInvocation.MyCommand.Path @(if ($NoPause) { '-NoPause' })
+        & $wps -NoProfile -ExecutionPolicy Bypass -STA -File $MyInvocation.MyCommand.Path @(if ($NoPause) { '-NoPause' }) @(if ($RedrawIcon) { '-RedrawIcon' })
         exit $LASTEXITCODE
     }
 }
@@ -87,27 +92,36 @@ if (Get-ChildItem -LiteralPath $fontDir -Filter 'georgia*.ttf' -ErrorAction Sile
 else { Warn 'Georgia font' 'not installed - the icon will use a stand-in font' }
 
 # 8. Picture-House.ps1 is here and reads cleanly
-$appVer = '1.0.0'
+$appVer = ''
 if (-not (Test-Path -LiteralPath $src)) {
-    Fail 'Picture-House.ps1' "not found in $here"; Hint 'Keep this build script in the same folder as Picture-House.ps1.'
+    Fail 'Picture-House.ps1' "not found at $src"; Hint 'Keep this build script in the repo folder (Source\), next to src\.'
 } else {
     $tok = $null; $errs = $null
     $ast = [Management.Automation.Language.Parser]::ParseFile($src, [ref]$tok, [ref]$errs)
     if ($errs -and $errs.Count) { Fail 'Picture-House.ps1' ("has an error on line $($errs[0].Extent.StartLineNumber): $($errs[0].Message)"); Hint 'Use an unedited copy from the Picture House zip.' }
     else {
-        $m = Select-String -LiteralPath $src -Pattern "^\`$AppVersion = '([\d\.]+)'" | Select-Object -First 1
+        $m = Select-String -LiteralPath $src -Pattern "^\`$AppVersion = '(\d+\.\d{2})'" | Select-Object -First 1
         if ($m) { $appVer = $m.Matches[0].Groups[1].Value }
         $kb = [math]::Round((Get-Item -LiteralPath $src).Length / 1KB)
-        Pass 'Picture-House.ps1' "version $appVer, $kb KB, no errors"
+        if ($appVer) { Pass 'Picture-House.ps1' "version $appVer, $kb KB, no errors" }
+        else { Fail 'Picture-House.ps1' "no `$AppVersion = '<major>.<two-digit minor>' (e.g. '1.00') near the top" }
     }
 }
+if ($appVer) {
+    $exe = Join-Path $buildsDir "Picture House v$appVer.exe"
+    # the version lives in the script and the changelog; they must agree before anything is built
+    if (-not (Test-Path -LiteralPath $changelog)) { Fail 'CHANGELOG.md' "not found in $here" }
+    elseif (Select-String -LiteralPath $changelog -Pattern ("^## \[" + [regex]::Escape($appVer) + "\]") -Quiet) { Pass 'CHANGELOG.md' "has an entry for $appVer" }
+    else { Fail 'CHANGELOG.md' "has no '## [$appVer]' entry"; Hint 'Add the release notes for this version (Keep a Changelog format), then run this again.' }
+}
 
-# 9. The folder can be written to
+# 9. The Builds folder (beside Source\) can be written to
 try {
-    $probe = Join-Path $here ('.write-test-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    if (-not (Test-Path -LiteralPath $buildsDir)) { [void](New-Item -ItemType Directory -Path $buildsDir -Force) }
+    $probe = Join-Path $buildsDir ('.write-test-' + [guid]::NewGuid().ToString('N') + '.tmp')
     [IO.File]::WriteAllText($probe, 'x'); Remove-Item -LiteralPath $probe -Force
-    Pass 'Folder can be written to' $here
-} catch { Fail 'Folder can be written to' $here; Hint 'Copy the Picture House folder somewhere you own (e.g. E:\Picture House), not Program Files or a read-only share.' }
+    Pass 'Builds folder can be written to' $buildsDir
+} catch { Fail 'Builds folder can be written to' $buildsDir; Hint 'Keep the project somewhere you own (e.g. E:\Created\Home\Picture-House), not Program Files or a read-only share.' }
 
 # 10. Enough free disk space
 try {
@@ -117,9 +131,9 @@ try {
 } catch { Warn 'Free disk space' "couldn't check ($($_.Exception.Message))" }
 
 # 11. Picture House isn't running from the old exe (it would be locked)
-$running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -eq $exe } catch { $false } })
-if ($running.Count) { Fail 'Picture House.exe is closed' 'it is running - close Picture House and run this again' }
-else { Pass 'Picture House.exe is closed' }
+$running = @(if ($exe) { Get-Process -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -eq $exe } catch { $false } } })
+if ($running.Count) { Fail 'Picture House is closed' "$([IO.Path]::GetFileName($exe)) is running - close Picture House and run this again" }
+else { Pass 'Picture House is closed' }
 
 # 12. PS2EXE (the tool that makes the exe)
 $ps2 = Get-Module -ListAvailable -Name ps2exe | Sort-Object Version -Descending | Select-Object -First 1
@@ -151,9 +165,11 @@ if ($Script:Failures) {
 Write-Line ('All requirements met' + $(if ($Script:Warnings) { " ($($Script:Warnings) warning(s) - see [ !! ] above)" } else { '' }) + '.') 'Green'
 Write-Line ''
 
-# ---- The icon: drawn by the same code as the app's own icon, at every size Windows uses ----
-Write-Line 'Making the icon' 'White'
-try {
+# ---- The icon: assets\Picture-House.ico, redrawn from the app's own New-AppIcon when asked (or missing) ----
+Write-Line 'The icon' 'White'
+if ((Test-Path -LiteralPath $ico) -and -not $RedrawIcon) {
+    Pass 'Picture-House.ico' 'using the one in assets\ (run with -RedrawIcon to remake it)'
+} else { try {
     $fn = $ast.FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'New-AppIcon' }, $true) | Select-Object -First 1
     if (-not $fn) { throw 'New-AppIcon was not found in Picture-House.ps1' }
     . ([scriptblock]::Create($fn.Extent.Text))
@@ -176,39 +192,42 @@ try {
         }
         foreach ($p in $pngs) { $bw.Write([byte[]]$p) }
     } finally { $bw.Close() }
-    Pass 'Picture House.ico' ("$($sizes.Count) sizes, 16 to 256 px - " + [math]::Round((Get-Item -LiteralPath $ico).Length / 1KB) + ' KB')
+    Pass 'Picture-House.ico' ("$($sizes.Count) sizes, 16 to 256 px - " + [math]::Round((Get-Item -LiteralPath $ico).Length / 1KB) + ' KB')
 } catch {
-    if (Test-Path -LiteralPath $ico) { Warn 'Picture House.ico' "couldn't redraw it ($($_.Exception.Message)) - using the one already here" }
-    else { Warn 'Picture House.ico' "couldn't make it ($($_.Exception.Message)) - the exe will have the standard icon" }
-}
+    if (Test-Path -LiteralPath $ico) { Warn 'Picture-House.ico' "couldn't redraw it ($($_.Exception.Message)) - using the one already there" }
+    else { Warn 'Picture-House.ico' "couldn't make it ($($_.Exception.Message)) - the exe will have the standard icon" }
+} }
 Write-Line ''
 
 # ---- Build ----
-Write-Line "Building Picture House.exe (version $appVer)" 'White'
+$exeName = [IO.Path]::GetFileName($exe)
+Write-Line "Building $exeName" 'White'
 try {
     Import-Module ps2exe -ErrorAction Stop
     $old = $null
     if (Test-Path -LiteralPath $exe) { $old = "$exe.old"; Move-Item -LiteralPath $exe -Destination $old -Force }
     $iconArg = @{}; if (Test-Path -LiteralPath $ico) { $iconArg.iconFile = $ico }
     # -noConsole: no black window   -STA: the WPF window needs it   -noOutput/-noError: no stray pop-up boxes
+    # Windows wants a four-part file version: 1.00 -> 1.0.0.0, 1.10 -> 1.10.0.0
+    $vp = $appVer.Split('.'); $fileVer = '{0}.{1}.0.0' -f [int]$vp[0], [int]$vp[1]
     Invoke-ps2exe -inputFile $src -outputFile $exe -noConsole -STA -noOutput -noError @iconArg `
         -title 'Picture House' -description 'A film library for your NAS' -product 'Picture House' `
-        -company 'Jason Rhodes' -copyright ('(c) ' + (Get-Date).Year + ' Jason Rhodes') -version $appVer | Out-Null
+        -company 'Jason Rhodes' -copyright 'Copyright (c) 2026 Jason Rhodes' -version $fileVer | Out-Null
     if (-not (Test-Path -LiteralPath $exe)) { throw 'PS2EXE finished but no exe was made' }
     Start-Sleep -Seconds 2   # give the antivirus a moment to look at it
     if (-not (Test-Path -LiteralPath $exe)) {
-        Fail 'Picture House.exe' 'it was made but then disappeared - your antivirus has probably quarantined it'
+        Fail $exeName 'it was made but then disappeared - your antivirus has probably quarantined it'
         Hint 'Programs made with PS2EXE are sometimes flagged by mistake. Restore it from the antivirus'
         Hint '(Windows Security > Protection history, or ESET > Quarantine) and add an exclusion for this folder.'
-        if ($old -and (Test-Path -LiteralPath $old)) { Move-Item -LiteralPath $old -Destination $exe -Force; Hint 'Your previous Picture House.exe has been put back.' }
+        if ($old -and (Test-Path -LiteralPath $old)) { Move-Item -LiteralPath $old -Destination $exe -Force; Hint "Your previous $exeName has been put back." }
         Finish 1
     }
     if ($old -and (Test-Path -LiteralPath $old)) { Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue }
     $info = Get-Item -LiteralPath $exe
-    Pass 'Picture House.exe' ("{0} KB, version {1}" -f [math]::Round($info.Length / 1KB), $info.VersionInfo.FileVersion)
+    Pass $exeName ("{0} KB, version {1}" -f [math]::Round($info.Length / 1KB), $info.VersionInfo.FileVersion)
 } catch {
-    Fail 'Picture House.exe' $_.Exception.Message
-    if ($old -and (Test-Path -LiteralPath $old) -and -not (Test-Path -LiteralPath $exe)) { Move-Item -LiteralPath $old -Destination $exe -Force; Hint 'Your previous Picture House.exe has been put back.' }
+    Fail $exeName $_.Exception.Message
+    if ($old -and (Test-Path -LiteralPath $old) -and -not (Test-Path -LiteralPath $exe)) { Move-Item -LiteralPath $old -Destination $exe -Force; Hint "Your previous $exeName has been put back." }
     Finish 1
 }
 
@@ -221,7 +240,7 @@ if (-not $NoPause) {
             $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Picture House.lnk'
             $sh = New-Object -ComObject WScript.Shell
             $s = $sh.CreateShortcut($lnk)
-            $s.TargetPath = $exe; $s.WorkingDirectory = $here; $s.Description = 'Picture House - your film library'
+            $s.TargetPath = $exe; $s.WorkingDirectory = $buildsDir; $s.Description = 'Picture House - your film library'
             if (Test-Path -LiteralPath $ico) { $s.IconLocation = "$ico,0" }
             $s.Save()
             Pass 'Desktop shortcut' $lnk
@@ -230,7 +249,7 @@ if (-not $NoPause) {
 }
 
 Write-Line ''
-Write-Line 'Done. Start Picture House by double-clicking "Picture House.exe" (you can pin it to Start or the taskbar).' 'Green'
-Write-Line 'It uses the Data folder beside it, so your library, settings and watched history are all still there.' 'Gray'
-Write-Line 'Run this again after each Picture House update.' 'Gray'
+Write-Line "Done: $exe" 'Green'
+Write-Line 'Your library, settings and watched history are in %APPDATA%\Picture House, so every build uses the same data.' 'Gray'
+Write-Line 'Bump $AppVersion and add a CHANGELOG entry before the next build; older exes stay alongside in Builds\.' 'Gray'
 Finish 0
