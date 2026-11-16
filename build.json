@@ -3,5 +3,19 @@
   "EntryScript": "src\\Picture-House.ps1",
   "Icon": "assets\\Picture-House.ico",
   "Side": "Home",
-  "IncludeFiles": []
+  "Description": "PowerShell/WPF tool for browsing the film library on your NAS",
+  "RequireAdmin": false,
+  "Release": {
+    "Files": {
+      "Picture-House.ps1": "src\\Picture-House.ps1",
+      "New-PictureHouseShortcut.ps1": "src\\New-PictureHouseShortcut.ps1",
+      "Picture House.cmd": "release\\Picture House.cmd",
+      "assets\\Picture-House.ico": "assets\\Picture-House.ico",
+      "assets\\Picture-House.png": "assets\\Picture-House.png",
+      "README.md": "README.md",
+      "CHANGELOG.md": "CHANGELOG.md",
+      "LICENSE": "LICENSE"
+    },
+    "Shortcut": "New-PictureHouseShortcut.ps1"
+  }
 }

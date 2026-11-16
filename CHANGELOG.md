@@ -2,10 +2,33 @@
 
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), with versions numbered
-`<major>.<minor>` and a two-digit minor (v1.00, v1.01 ... v1.10) to match the exe file names.
+`<major>.<minor>` and a two-digit minor (v1.00, v1.01 ... v1.10) to match the release names.
 The same list is in the app under **Settings → Version history**.
 
 ## [Unreleased]
+
+## [1.01] - 2026-11-16
+
+### Changed
+- **No exe any more.** Antivirus programs (ESET among them) kept flagging the PS2EXE exe as a
+  generic trojan by mistake, so Picture House now ships as its script, like the other Home tools.
+  The release is `Picture-House-v1.01.zip`: unzip it and double-click **Picture House.cmd**, which
+  makes a **Picture House** shortcut in that folder and in the Start menu and starts Picture House
+  without a console window. `"Picture House.cmd" debug` starts it in a console to show any errors.
+- **Build.cmd** replaces `Build-Exe.cmd` and `Build-Exe.ps1`. It checks the scripts and the
+  version, runs PSScriptAnalyzer, makes `..\Builds\Picture House v<version>\` and its zip, refreshes
+  `..\Builds\Picture House.lnk` for the Home Launcher and scans the build with ESET.
+  `build.json` lists the release files.
+- The window and taskbar icon come from `assets\Picture-House.ico` (sharp at every size), and
+  Picture House sets its own taskbar ID, so its taskbar button shows its icon and pinning it pins
+  Picture House rather than PowerShell. If the icon file is missing it's drawn as before.
+- Restart after **Restore from backup** or **Bring in…** uses the Picture House shortcut, and no
+  longer looks for an exe.
+
+### Removed
+- The exe-only code (finding the folder and restarting from the exe).
+
+Your data stays in `%APPDATA%\Picture House\`; nothing moves.
 
 ## [1.00] - 2026-11-07
 First release in the house style. Version numbers restart here; the history before this

@@ -1,15 +1,16 @@
 ﻿<#
     Picture House — a film library for the NAS
     -------------------------------------------
-    Version : 1.00 (7 Nov 2026)
+    Version : 1.01 (16 Nov 2026)
     Author  : Jason Rhodes
     Licence : MIT (see LICENSE)
     Needs   : Windows PowerShell 5.1, .NET Framework 4.7.2+ (WPF)
-    Launch  : Start-PictureHouse.cmd  (or: powershell -STA -ExecutionPolicy Bypass -File src\Picture-House.ps1)
+    Launch  : the "Picture House" shortcut made by "Picture House.cmd" (release), or
+              Start-PictureHouse.cmd in the repo (or: powershell -STA -ExecutionPolicy Bypass -File src\Picture-House.ps1)
 
     Everything the app writes (settings and API keys, the film list, your watched history,
     the artwork cache, logs and backups) lives in %APPDATA%\Picture House, never in the
-    repo or beside the exe. The films themselves stay on the NAS and are only read
+    repo or the release folder. The films themselves stay on the NAS and are only read
     (the one exception is "Move to shelf", which you confirm each time).
 #>
 
@@ -261,7 +262,8 @@ $ComboStyles = @'
 '@
 
 $AppName    = 'Picture House'
-$AppVersion = '1.00'   # <major>.<two-digit minor>; matches CHANGELOG.md and the exe name
+$AppVersion = '1.01'   # <major>.<two-digit minor>; matches CHANGELOG.md and the release folder name
+$AppId      = 'jason4bury.Picture-House'   # taskbar ID; the same as the shortcut's (src\New-PictureHouseShortcut.ps1)
 
 # ---- WPF needs an STA thread -------------------------------------------------------
 if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
@@ -271,6 +273,12 @@ if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
 }
 
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml, System.Windows.Forms, System.Drawing
+
+# One taskbar button with Picture House's own icon (not PowerShell's), and pinning it pins Picture House.
+try {
+    Add-Type -Namespace 'PictureHouse' -Name 'Shell' -MemberDefinition '[DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern int SetCurrentProcessExplicitAppUserModelID(string appId);'
+    [void][PictureHouse.Shell]::SetCurrentProcessExplicitAppUserModelID($AppId)
+} catch {}
 
 # ---- The Picture House icon (window, taskbar, splash) — drawn here, so there's no image file to lose ----
 function New-AppIcon([int]$size = 256) {
@@ -301,7 +309,7 @@ function New-AppIcon([int]$size = 256) {
     return $bmp
 }
 function Save-AppIcon([string]$path) {
-    # a .ico holding one 256px PNG — handy for a desktop shortcut or the exe builder
+    # a .ico holding one 256px PNG — a spare copy in the data folder for your own shortcuts
     try {
         $enc = New-Object Windows.Media.Imaging.PngBitmapEncoder
         [void]$enc.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create((New-AppIcon 256)))
@@ -313,7 +321,16 @@ function Save-AppIcon([string]$path) {
         $bw.Write($png); $bw.Close()
     } catch {}
 }
-try { $Script:AppIcon = New-AppIcon 256 } catch { $Script:AppIcon = $null }
+# The icon file has every size from 16 to 256 px, so it stays sharp in the title bar and taskbar.
+# It's in assets\ beside the script (release) or beside src\ (repo); if it's missing, draw it.
+$Script:AppIcon = $null
+if ($PSScriptRoot) {
+    foreach ($ico in @((Join-Path $PSScriptRoot 'assets\Picture-House.ico'), (Join-Path (Split-Path -Parent $PSScriptRoot) 'assets\Picture-House.ico'))) {
+        if (-not (Test-Path -LiteralPath $ico)) { continue }
+        try { $Script:AppIcon = [Windows.Media.Imaging.BitmapFrame]::Create([Uri]$ico, [Windows.Media.Imaging.BitmapCreateOptions]::None, [Windows.Media.Imaging.BitmapCacheOption]::OnLoad); break } catch {}
+    }
+}
+if (-not $Script:AppIcon) { try { $Script:AppIcon = New-AppIcon 256 } catch { $Script:AppIcon = $null } }
 
 # ---- Little "opening…" card so you can see it's on its way (the main window takes a few seconds) ----
 $Script:Splash = $null
@@ -335,10 +352,10 @@ try {
 function Close-Splash { if ($Script:Splash) { try { $Script:Splash.Close() } catch {}; $Script:Splash = $null } }
 
 # ---- Folders ------------------------------------------------------------------------
-# $Base is where the script (or exe) is. Picture House's own data lives in %APPDATA%\Picture House,
-# so updating the script, rebuilding the exe or committing the repo can never touch it.
+# $Base is where the script is (src\ in the repo, "Builds\Picture House v1.xx" for a release). Picture House's
+# own data lives in %APPDATA%\Picture House, so a new release or a commit can never touch it.
 $Base = $PSScriptRoot
-if (-not $Base) { $Base = Split-Path -Parent ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) }
+if (-not $Base) { $Base = Split-Path -Parent $MyInvocation.MyCommand.Definition }
 $DataDir  = Join-Path ([Environment]::GetFolderPath('ApplicationData')) $AppName
 $CacheDir = Join-Path $DataDir 'Cache'
 if (-not (Test-Path -LiteralPath $DataDir)) { [void](New-Item -ItemType Directory -Path $DataDir -Force) }
@@ -367,7 +384,7 @@ function Stop-Startup([string]$why) {
     exit 1
 }
 # ---- One-time move from the old "Data" folder beside the script (Picture House 1.3.x and earlier) ----
-# Looks beside the script/exe and one folder up (the old repo root, when the script is now in src\).
+# Looks beside the script and one folder up (the old repo root, when the script is now in src\).
 # The old folder is copied, never deleted, then renamed "Data (moved to AppData)" so it's only used once.
 # settings.json is copied last, so a move that stops half-way is simply tried again next time.
 function Move-OldDataFolder {
@@ -6385,8 +6402,14 @@ function Find-ZoomPlayer {
 $AboutText = @"
 Picture House $AppVersion — a film library for the shelves on your NAS.
 
+New in 1.01 (16 November 2026)
+•  No exe any more. Antivirus programs kept flagging the exe as a threat by mistake, so Picture House now comes as its script with a "Picture House.cmd" that makes a shortcut (in its folder and the Start menu) and starts it without a console window.
+•  The taskbar button shows Picture House's own icon, sharp at every size, and pinning it pins Picture House.
+•  Restart after a restore or import uses that shortcut.
+•  Your data stays where it is, in %APPDATA%\Picture House.
+
 New in 1.00 (7 November 2026)
-•  Version numbers start again at 1.00 for the first release on GitHub, and now match the exe name (Picture House v1.00.exe).
+•  Version numbers start again at 1.00 for the first release on GitHub.
 •  Your data has moved to %APPDATA%\Picture House. The old Data folder beside the app is copied across automatically the first time and renamed "Data (moved to AppData)" — nothing is deleted.
 •  Move to shelf with a loose file now only takes that film's own extras (subtitles, .nfo, artwork). Before, a film named without a year (e.g. Airplane) could take another film that starts with the same name (Airplane.II.1982.mkv) with it. If a move fails half-way, the files already moved are put back.
 •  The About window shows the copyright and MIT licence.
@@ -7274,15 +7297,16 @@ function Restart-PictureHouse {
     $Window.Close()
 }
 function Start-PictureHouseAgain {
+    # Start a new copy the way you normally start it: the "Picture House" shortcut beside the script
+    # (a release; made by "Picture House.cmd"), else Start-PictureHouse.cmd (the repo), else PowerShell hidden.
     try {
-        $self = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-        $cmd = @((Join-Path $Base 'Start-PictureHouse.cmd'), (Join-Path (Split-Path -Parent $Base) 'Start-PictureHouse.cmd')) |
-            Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-        if ($self -notmatch '(?i)\\(powershell|pwsh|powershell_ise)\.exe$') { Start-Process -FilePath $self }          # Picture House v1.xx.exe
-        elseif ($cmd) { Start-Process -FilePath $cmd -WindowStyle Hidden }
+        $lnk = Join-Path $Base 'Picture House.lnk'
+        $cmd = Join-Path (Split-Path -Parent $Base) 'Start-PictureHouse.cmd'
+        if (Test-Path -LiteralPath $lnk) { Start-Process -FilePath $lnk }
+        elseif (Test-Path -LiteralPath $cmd) { Start-Process -FilePath $cmd -WindowStyle Hidden }
         else {
-            $ps1 = Join-Path $Base 'Picture-House.ps1'
-            Start-Process -FilePath $self -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', "`"$ps1`"")
+            $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            Start-Process -FilePath $ps -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', "`"$PSCommandPath`"")
         }
         Write-Log 'Restarting Picture House.'
     } catch { Write-Log "Couldn't restart: $($_.Exception.Message)" }
