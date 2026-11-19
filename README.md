@@ -6,7 +6,7 @@
 
 A film library for the films on your NAS: posters, film info, cast, collections, stats, and your own watched history and ratings, in a PowerShell/WPF window on your PC.
 
-![Version](https://img.shields.io/badge/version-v1.02-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Picture-House)
+![Version](https://img.shields.io/badge/version-v1.03-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Picture-House)
 
 ## ✨ Features
 
@@ -34,7 +34,7 @@ Picture House reads your film folders over the network and turns them into a bro
 
 ## 📦 Installation
 
-1. Download `Picture-House-v1.02.zip` from the [latest release](../../releases/latest) and unzip it wherever you like to keep it.
+1. Download `Picture-House-v1.03.zip` from the [latest release](../../releases/latest) and unzip it wherever you like to keep it.
 2. Double-click **Picture House.cmd** in the unzipped folder. It makes a **Picture House** shortcut there and in the Start menu, and starts Picture House. From then on, use the shortcut, the Start menu or a pinned taskbar button.
 
 Nothing is installed and no Windows settings are changed. The shortcut runs the script with PowerShell's execution policy bypassed for that run only.

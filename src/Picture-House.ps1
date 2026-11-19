@@ -262,7 +262,7 @@ $ComboStyles = @'
 '@
 
 $AppName    = 'Picture House'
-$AppVersion = '1.02'   # <major>.<two-digit minor>; matches CHANGELOG.md and the release folder name
+$AppVersion = '1.03'   # <major>.<two-digit minor>; matches CHANGELOG.md and the release folder name
 $AppId      = 'jason4bury.Picture-House'   # taskbar ID; the same as the shortcut's (src\New-PictureHouseShortcut.ps1)
 
 # ---- WPF needs an STA thread -------------------------------------------------------
@@ -368,6 +368,46 @@ $Files = @{
     Log      = Join-Path $DataDir 'picture-house.log'
 }
 
+# ---- Look: cream (light) or a dark "cinema at night" version ---------------------------
+# Settings > Look picks Light (the look so far), Dark, or Follow Windows. In the dark look every
+# window's XAML and the colours made in code pass through Convert-PHColour, which swaps each
+# cream, paper and ink colour for its dark partner. The teal header bands, the red buttons, the
+# cream text on them and the shelf colours stay the same. The look is chosen at start.
+$Script:DarkColours = @{
+    '#F3EEE4' = '#1A1714'; '#FFFCF6' = '#25211C'; '#FAF5EC' = '#221E19'; '#F8EFDF' = '#2A251F'; '#F7F1E6' = '#2C2722'
+    '#EFE6D6' = '#2B2621'; '#ECE3D2' = '#332D26'; '#E3D7C2' = '#3A342C'; '#E2D9C9' = '#3E3830'; '#D8CCB7' = '#4A4339'
+    '#1F1B16' = '#EDE5D8'; '#2B2620' = '#E4DBCD'; '#2E2924' = '#DDD3C4'; '#4A433B' = '#CFC5B6'; '#5B5348' = '#BFB5A6'
+    '#7B7266' = '#A89F92'; '#9C9385' = '#8A8174'; '#1F1B17' = '#24524F'
+}
+$Script:LookMode = 'Light'
+try {
+    if (Test-Path -LiteralPath $Files.Settings) {
+        $lm = [string]((Get-Content -LiteralPath $Files.Settings -Raw -Encoding UTF8 | ConvertFrom-Json).Look)
+        if ($lm -in 'Light', 'Dark', 'System') { $Script:LookMode = $lm }
+    }
+} catch { $Script:LookMode = 'Light' }
+$Script:PHDark = ($Script:LookMode -eq 'Dark')
+if ($Script:LookMode -eq 'System') {
+    try { $Script:PHDark = ([int](Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name AppsUseLightTheme -ErrorAction Stop).AppsUseLightTheme -eq 0) } catch { $Script:PHDark = $false }
+}
+function Convert-PHColour([string]$Text) {
+    if (-not $Script:PHDark -or -not $Text) { return $Text }
+    # teal as a text or line colour would vanish on the dark page; teal backgrounds stay
+    $Text = [regex]::Replace($Text, '(Foreground|Stroke)(=""?|"\s+Value=")#173F3E', '$1$2#8CC9C3')
+    return [regex]::Replace($Text, '#[0-9A-Fa-f]{6}\b', { param($m) $k = $m.Value.ToUpperInvariant(); if ($Script:DarkColours.ContainsKey($k)) { $Script:DarkColours[$k] } else { $m.Value } })
+}
+function Set-PHTitleBar($Win) {
+    if (-not $Script:PHDark) { return }
+    try {
+        if (-not ('PictureHouse.Dwm' -as [type])) {
+            Add-Type -Namespace 'PictureHouse' -Name 'Dwm' -MemberDefinition '[DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);'
+        }
+        $hwnd = (New-Object Windows.Interop.WindowInteropHelper($Win)).Handle
+        $v = 1
+        if ($hwnd -ne [IntPtr]::Zero) { [void][PictureHouse.Dwm]::DwmSetWindowAttribute($hwnd, 20, [ref]$v, 4) }
+    } catch { }
+}
+
 function Write-Log([string]$msg) {
     try {
         if ((Test-Path -LiteralPath $Files.Log) -and ((Get-Item -LiteralPath $Files.Log).Length -gt 1MB)) {
@@ -465,7 +505,9 @@ function Show-PHMessage([string]$msg, [string]$kind = 'Information', [string[]]$
     $enc = { param($t) [Security.SecurityElement]::Escape([string]$t) }
     $x = $x.Replace('#WIDTH#', [string]$width).Replace('<!--STYLES-->', $DialogStyles).Replace('<!--HEADER-->', (New-DialogHeader (& $enc $heading)))
     [xml]$dx = $x
+    $dx = [xml](Convert-PHColour $dx.OuterXml)
     $dw = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $dx))
+    $dw.Add_SourceInitialized({ Set-PHTitleBar $this })
     if ($Script:AppIcon) { try { $dw.Icon = $Script:AppIcon } catch {} }
     if ($owner) { try { $dw.Owner = $owner } catch { $owner = $null } }
     if (-not $owner) { $dw.WindowStartupLocation = 'CenterScreen'; $dw.Topmost = $true; $dw.ShowInTaskbar = $true }
@@ -1082,6 +1124,7 @@ $XamlText = @'
     <SolidColorBrush x:Key="Paper" Color="#F3EEE4"/>
     <SolidColorBrush x:Key="Card" Color="#FFFCF6"/>
     <SolidColorBrush x:Key="Ink" Color="#1F1B16"/>
+    <SolidColorBrush x:Key="InkFill" Color="#1F1B17"/>
     <SolidColorBrush x:Key="Muted" Color="#7B7266"/>
     <SolidColorBrush x:Key="Line" Color="#E2D9C9"/>
     <SolidColorBrush x:Key="Hover" Color="#ECE3D2"/>
@@ -1091,6 +1134,11 @@ $XamlText = @'
     <SolidColorBrush x:Key="TealLight" Color="#2A5F5C"/>
     <SolidColorBrush x:Key="Cream" Color="#F6EBD9"/>
     <SolidColorBrush x:Key="CreamDim" Color="#A6F6EBD9"/>
+    <!-- controls take Windows' black text unless told otherwise; these follow the look -->
+    <Style TargetType="CheckBox"><Setter Property="Foreground" Value="#1F1B16"/></Style>
+    <Style TargetType="RadioButton"><Setter Property="Foreground" Value="#1F1B16"/></Style>
+    <Style TargetType="ListBox"><Setter Property="Foreground" Value="#1F1B16"/></Style>
+    <Style TargetType="PasswordBox"><Setter Property="Foreground" Value="#1F1B16"/><Setter Property="Background" Value="#FFFCF6"/><Setter Property="CaretBrush" Value="#1F1B16"/></Style>
 
     <Style x:Key="BtnPrimary" TargetType="Button">
       <Setter Property="Background" Value="{StaticResource Accent}"/>
@@ -1168,7 +1216,7 @@ $XamlText = @'
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Background" Value="{StaticResource Hover}"/></Trigger>
               <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="b" Property="Background" Value="{StaticResource Ink}"/>
+                <Setter TargetName="b" Property="Background" Value="{StaticResource InkFill}"/>
                 <Setter Property="Foreground" Value="{StaticResource Cream}"/>
               </Trigger>
             </ControlTemplate.Triggers>
@@ -1211,7 +1259,7 @@ $XamlText = @'
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="b" Property="Background" Value="{StaticResource Ink}"/>
+                <Setter TargetName="b" Property="Background" Value="{StaticResource InkFill}"/>
                 <Setter Property="Foreground" Value="{StaticResource Cream}"/>
               </Trigger>
             </ControlTemplate.Triggers>
@@ -1246,6 +1294,8 @@ $XamlText = @'
     </Style>
 
     <Style x:Key="Field" TargetType="TextBox">
+      <Setter Property="Foreground" Value="#1F1B16"/>
+      <Setter Property="CaretBrush" Value="#1F1B16"/>
       <Setter Property="Background" Value="{StaticResource Card}"/>
       <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
       <Setter Property="Padding" Value="9,6"/>
@@ -1265,10 +1315,12 @@ $XamlText = @'
     </Style>
 
     <Style x:Key="H1" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource Ink}"/>
       <Setter Property="FontFamily" Value="Georgia"/>
       <Setter Property="FontSize" Value="30"/>
     </Style>
     <Style x:Key="H2" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource Ink}"/>
       <Setter Property="FontFamily" Value="Georgia"/>
       <Setter Property="FontSize" Value="19"/>
       <Setter Property="Margin" Value="0,0,0,8"/>
@@ -1338,6 +1390,7 @@ $XamlText = @'
     </Style>
 
     <Style TargetType="DataGrid">
+      <Setter Property="Foreground" Value="{StaticResource Ink}"/>
       <Setter Property="Background" Value="{StaticResource Card}"/>
       <Setter Property="RowBackground" Value="{StaticResource Card}"/>
       <Setter Property="AlternatingRowBackground" Value="#FAF5EC"/>
@@ -1353,6 +1406,7 @@ $XamlText = @'
       <Setter Property="AutoGenerateColumns" Value="False"/>
     </Style>
     <Style TargetType="DataGridColumnHeader">
+      <Setter Property="Foreground" Value="{StaticResource Ink}"/>
       <Setter Property="Background" Value="{StaticResource Paper}"/>
       <Setter Property="Padding" Value="8,7"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
@@ -1394,7 +1448,7 @@ $XamlText = @'
               <Border.Background><ImageBrush ImageSource="{Binding Poster}" Stretch="UniformToFill"/></Border.Background>
             </Border>
             <Border Height="4" VerticalAlignment="Bottom" CornerRadius="0,0,4,4" Background="{Binding ShelfBrush}"/>
-            <Border Visibility="{Binding ResVis}" Background="#E61F1B16" CornerRadius="3" Padding="5,1" Margin="6"
+            <Border Visibility="{Binding ResVis}" Background="#E61F1B17" CornerRadius="3" Padding="5,1" Margin="6"
                     HorizontalAlignment="Left" VerticalAlignment="Top">
               <TextBlock Text="{Binding Res}" FontSize="10" FontWeight="Bold" Foreground="#F6EBD9"/>
             </Border>
@@ -1411,7 +1465,7 @@ $XamlText = @'
               </Border>
             </StackPanel>
           </Grid>
-          <TextBlock Text="{Binding Title}" FontWeight="SemiBold" Margin="1,9,0,0" TextTrimming="CharacterEllipsis"/>
+          <TextBlock Text="{Binding Title}" FontWeight="SemiBold" Margin="1,9,0,0" TextTrimming="CharacterEllipsis" Foreground="{StaticResource Ink}"/>
           <TextBlock Text="{Binding Sub}" Foreground="#5B5348" FontSize="12.5" Margin="1,2,0,0" TextTrimming="CharacterEllipsis"/>
         </StackPanel>
       </Border>
@@ -1535,9 +1589,9 @@ $XamlText = @'
         </StackPanel>
       </Grid>
 
-      <TabControl x:Name="tabs" Grid.Row="1" Background="Transparent" BorderThickness="0" Padding="0">
+      <TabControl x:Name="tabs" Grid.Row="1" Background="Transparent" BorderThickness="0" Padding="0" Foreground="#1F1B16">
         <TabControl.ItemContainerStyle>
-          <Style TargetType="TabItem"><Setter Property="Visibility" Value="Collapsed"/></Style>
+          <Style TargetType="TabItem"><Setter Property="Visibility" Value="Collapsed"/><Setter Property="Foreground" Value="#1F1B16"/></Style>
         </TabControl.ItemContainerStyle>
 
         <!-- ===== Library ===== -->
@@ -2301,6 +2355,18 @@ $XamlText = @'
                   <CheckBox x:Name="chkWatchedOnPlay" Content="Mark a film as watched when I press Play" Margin="0,12,0,0"/>
                 </StackPanel>
               </Border>
+
+              <Border Style="{StaticResource CardBox}" Margin="0,0,0,14">
+                <StackPanel>
+                  <TextBlock Text="Look" Style="{StaticResource H2}"/>
+                  <TextBlock Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,8" Text="The cream look, a dark one for evenings, or the same as Windows. A new look is used the next time Picture House starts."/>
+                  <StackPanel Orientation="Horizontal">
+                    <RadioButton x:Name="rbLookLight" GroupName="Look" Content="Light" Margin="0,0,18,0" Foreground="{StaticResource Ink}"/>
+                    <RadioButton x:Name="rbLookDark" GroupName="Look" Content="Dark" Margin="0,0,18,0" Foreground="{StaticResource Ink}"/>
+                    <RadioButton x:Name="rbLookSystem" GroupName="Look" Content="Follow Windows" Foreground="{StaticResource Ink}"/>
+                  </StackPanel>
+                </StackPanel>
+              </Border>
               <Border Style="{StaticResource CardBox}" Margin="0,0,0,14" BorderBrush="#E7B7AC">
                 <StackPanel>
                   <TextBlock Text="Start again" Style="{StaticResource H2}"/>
@@ -2506,7 +2572,7 @@ $XamlText = @'
     </Border>
 
     <!-- ================= Status bar ================= -->
-    <Border Grid.Row="1" Grid.ColumnSpan="3" Background="#1F1B16">
+    <Border Grid.Row="1" Grid.ColumnSpan="3" Background="#1F1B17">
       <Grid Margin="14,0">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/>
@@ -2575,7 +2641,7 @@ $XamlText = @'
                 Margin="0,0,24,18" Panel.ZIndex="50" Width="400"/>
 
     <!-- ================= Big poster viewer ================= -->
-    <Grid x:Name="gridBigPoster" Grid.RowSpan="2" Grid.ColumnSpan="3" Visibility="Collapsed" Background="#E61F1B16" Cursor="Hand">
+    <Grid x:Name="gridBigPoster" Grid.RowSpan="2" Grid.ColumnSpan="3" Visibility="Collapsed" Background="#E61F1B17" Cursor="Hand">
       <Grid Margin="60,40,60,36">
         <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <Image x:Name="imgBigPoster" Stretch="Uniform" StretchDirection="Both" RenderOptions.BitmapScalingMode="HighQuality">
@@ -2593,13 +2659,13 @@ $XamlText = @'
   </Grid>
 </Window>
 '@
-[xml]$Xaml = $XamlText.Replace('<!--COMBOSTYLES-->', $ComboStyles)
+[xml]$Xaml = Convert-PHColour ($XamlText.Replace('<!--COMBOSTYLES-->', $ComboStyles))
 
 # =====================================================================================
 #  Build the window
 # =====================================================================================
 $reader = New-Object System.Xml.XmlNodeReader $Xaml
-try { $Window = [Windows.Markup.XamlReader]::Load($reader) }
+try { $Window = [Windows.Markup.XamlReader]::Load($reader); $Window.Add_SourceInitialized({ Set-PHTitleBar $this }) }
 catch { $ex = $_.Exception; while ($ex.InnerException) { $ex = $ex.InnerException }; Stop-Startup ("The window layout failed to load: " + $ex.Message) }
 if (-not $Window) { Stop-Startup 'The window layout failed to load.' }
 $UI = @{}
@@ -2632,6 +2698,7 @@ function New-DefaultSettings {
         IgnoreFolders = 'Intros, Seerr'
         Extensions = '.mkv .mp4 .avi .m4v .mov .wmv .ts .m2ts .iso .mpg .mpeg .vob .webm .divx'
         LastScan = ''; WinW2 = 0; WinH2 = 0; WinMax2 = $false; WinCustom = $false; UiZoom = 100; DetailOpen = $true
+        Look = 'Light'   # Light (cream), Dark, or System (follow Windows); used from the next start
     }
 }
 
@@ -4287,7 +4354,7 @@ function Set-Stars([int]$n) {
     $bc = New-Object Windows.Media.BrushConverter
     for ($i = 1; $i -le 5; $i++) {
         $s = $UI["star$i"]
-        if ($i -le $n) { $s.Text = '★'; $s.Foreground = $bc.ConvertFromString('#C8432B') } else { $s.Text = '☆'; $s.Foreground = $bc.ConvertFromString('#9C9385') }
+        if ($i -le $n) { $s.Text = '★'; $s.Foreground = $bc.ConvertFromString('#C8432B') } else { $s.Text = '☆'; $s.Foreground = $bc.ConvertFromString((Convert-PHColour '#9C9385')) }
     }
 }
 
@@ -4544,7 +4611,9 @@ function Show-FixMatch([string]$key) {
 </Window>
 '@
     [xml]$dx = $fixText.Replace('<!--COMBOSTYLES-->', $ComboStyles + $DialogStyles).Replace('<!--HEADER-->', (New-DialogHeader 'Which film is this?'))
+    $dx = [xml](Convert-PHColour $dx.OuterXml)
     $dw = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $dx))
+    $dw.Add_SourceInitialized({ Set-PHTitleBar $this })
     $dw.Owner = $Window
     $Script:Dlg = @{ Win = $dw; Result = $null; Query = $dw.FindName('dQuery'); Year = $dw.FindName('dYear'); List = $dw.FindName('dList'); Id = $dw.FindName('dId') }
     $dw.FindName('dPath').Text = [string]$rec['Path']
@@ -4873,7 +4942,9 @@ function Show-RadarrAddDialog([int]$tmdbId, [string]$title, [int]$year, $roots) 
 </Window>
 '@
     [xml]$dx = $dxText.Replace('<!--COMBOSTYLES-->', $ComboStyles + $DialogStyles).Replace('<!--HEADER-->', (New-DialogHeader 'Send to Radarr'))
+    $dx = [xml](Convert-PHColour $dx.OuterXml)
     $dw = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $dx))
+    $dw.Add_SourceInitialized({ Set-PHTitleBar $this })
     $dw.Owner = $Window
     $dw.FindName('rTitle').Text = $title + $(if ($year) { " ($year)" } else { '' })
     $rr = $dw.FindName('rRoot'); $rp = $dw.FindName('rProfile')
@@ -5703,7 +5774,7 @@ function Refresh-HealthFilter {
     $UI.wpHealthSummary.Children.Clear()
     foreach ($c in ($counts | Sort-Object Count -Descending | Select-Object -First 8)) {
         $chip = New-Chip ("$($c.Name)  $($c.Count)") ("health|" + $c.Name) '#FFFCF6'
-        $chip.BorderBrush = (New-Object Windows.Media.BrushConverter).ConvertFromString('#E2D9C9'); $chip.BorderThickness = New-Object Windows.Thickness 1
+        $chip.BorderBrush = (New-Object Windows.Media.BrushConverter).ConvertFromString((Convert-PHColour '#E2D9C9')); $chip.BorderThickness = New-Object Windows.Thickness 1
         $chip.Add_MouseLeftButtonUp({ $n = ([string]$this.Tag).Substring(7); $hit = @($UI.cbHealthFilter.Items | Where-Object { ($_ -replace ' \(\d+\)$', '') -eq $n }); if ($hit.Count) { $UI.cbHealthFilter.SelectedItem = $hit[0] } })
         [void]$UI.wpHealthSummary.Children.Add($chip)
     }
@@ -5915,7 +5986,7 @@ function Refresh-Upgrades {
             else { $rt = "In Radarr  ·  $prof is happy with this copy$have — a search won't replace it unless you change the profile in Radarr."; $rb = '#7B7266' }
         }
         $act = $Script:RadarrActivity[[string]$v.TmdbId]
-        if ($act) { $rt = "$act   ·   $rt"; $rb = '#173F3E' }
+        if ($act) { $rt = "$act   ·   $rt"; $rb = $(if ($Script:PHDark) { '#8CC9C3' } else { '#173F3E' }) }
         $q = $(if ($v.Res) { $v.Res } else { '?' })
         [void]$rows.Add([pscustomobject]@{
             Key = $v.Key; Title = $v.Title; Sub = ($bits -join '   ·   '); Poster = $(if ($v.Poster) { $v.Poster } else { $null })
@@ -6004,7 +6075,7 @@ function Refresh-Stats {
     $UI.txtStatsSub.Text = $(if ($Settings.LastScan) { 'As of the last scan, ' + (PH-Date $Settings.LastScan).ToString('d MMMM yyyy, HH:mm') } else { '' })
     $UI.icStatCards.ItemsSource = @(
         [pscustomobject]@{ Value = ('{0:N0}' -f $n); Label = 'films'; Sub = ('{0} shelves' -f @($UI.lbShelves.Items).Count); Brush = '#C8432B' },
-        [pscustomobject]@{ Value = (Format-Size $size); Label = 'on the NAS'; Sub = $(if ($n) { 'avg ' + (Format-Size ($size / $n)) + ' a film' } else { '' }); Brush = '#173F3E' },
+        [pscustomobject]@{ Value = (Format-Size $size); Label = 'on the NAS'; Sub = $(if ($n) { 'avg ' + (Format-Size ($size / $n)) + ' a film' } else { '' }); Brush = $(if ($Script:PHDark) { '#8CC9C3' } else { '#173F3E' }) },
         [pscustomobject]@{ Value = ('{0:N0} h' -f ($mins / 60)); Label = 'of running time'; Sub = ('{0:N1} days back to back' -f ($mins / 1440)); Brush = '#D9902F' },
         [pscustomobject]@{ Value = $(if ($n) { '{0:0}%' -f (100 * $seen / $n) } else { '0%' }); Label = 'watched'; Sub = "$seen films · $seenYear this year"; Brush = '#3E8E4F' },
         [pscustomobject]@{ Value = $(if ($rated) { '{0:0.0}' -f ($rsum / $rated) } else { '–' }); Label = 'average TMDb rating'; Sub = "$rated rated films"; Brush = '#5B6FB0' },
@@ -6426,6 +6497,7 @@ function Load-SettingsUi {
     $UI.txtIgnore.Text = [string]$Settings.IgnoreFolders
     $UI.txtPlayer.Text = [string]$Settings.PlayerPath
     $UI.chkWatchedOnPlay.IsChecked = [bool]$Settings.WatchedOnPlay
+    switch ([string]$Settings.Look) { 'Dark' { $UI.rbLookDark.IsChecked = $true } 'System' { $UI.rbLookSystem.IsChecked = $true } default { $UI.rbLookLight.IsChecked = $true } }
     $UI.pwTmdb.Password = [string]$Settings.TmdbKey
     $UI.txtLang.Text = [string]$Settings.Language; $UI.txtRegion.Text = [string]$Settings.Region
     $UI.chkAutoFetch.IsChecked = [bool]$Settings.AutoFetch
@@ -6454,6 +6526,8 @@ function Save-SettingsUi {
     if ($oldIgnore -ne $Settings.IgnoreFolders) { $n = Remove-IgnoredFromLibrary; if ($n) { Status "Removed $n film(s) inside ignored folders." } }
     $Settings.PlayerPath = $UI.txtPlayer.Text.Trim().Trim('"')
     $Settings.WatchedOnPlay = [bool]$UI.chkWatchedOnPlay.IsChecked
+    $lookWas = [string]$Settings.Look
+    $Settings.Look = $(if ($UI.rbLookDark.IsChecked) { 'Dark' } elseif ($UI.rbLookSystem.IsChecked) { 'System' } else { 'Light' })
     $Settings.TmdbKey = $UI.pwTmdb.Password.Trim()
     $Settings.Language = $(if ($UI.txtLang.Text.Trim()) { $UI.txtLang.Text.Trim() } else { 'en-GB' })
     $Settings.Region = $(if ($UI.txtRegion.Text.Trim()) { $UI.txtRegion.Text.Trim().ToUpperInvariant() } else { 'GB' })
@@ -6465,7 +6539,7 @@ function Save-SettingsUi {
     if ($UI.cbRadarrProfile.SelectedItem) { $Settings.RadarrProfileId = [int]$UI.cbRadarrProfile.SelectedItem.Id; $Settings.RadarrProfileName = [string]$UI.cbRadarrProfile.SelectedItem.Name }
     Save-Settings
     $UI.txtWelcome.Visibility = $(if (@($Settings.Roots).Count -eq 0) { 'Visible' } else { 'Collapsed' })
-    Status 'Settings saved.'
+    Status $(if ($lookWas -ne $Settings.Look) { 'Settings saved. The new look is used the next time Picture House starts.' } else { 'Settings saved.' })
     return ($oldRoots -ne (@($Settings.Roots) -join '|'))
 }
 
@@ -6483,6 +6557,9 @@ function Find-ZoomPlayer {
 
 $AboutText = @"
 Picture House $AppVersion — a film library for the shelves on your NAS.
+
+New in 1.03 (19 November 2026)
+•  A dark look for evenings: Settings → Look chooses Light (the cream look), Dark, or the same as Windows. The teal header, red buttons and shelf colours stay; the paper, cards and text go dark, with a dark title bar. A new look is used the next time Picture House starts.
 
 New in 1.02 (18 November 2026)
 •  Messages and questions now come up in Picture House's own look (cream window, teal header, red and cream buttons) instead of Windows' plain grey box. They sit over whichever Picture House window is open, and you can select and copy their text.
@@ -6529,7 +6606,7 @@ $XNS = 'xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:
 $ChartStyles = @'
 <Style TargetType="Path"><Setter Property="Cursor" Value="Hand"/><Style.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter Property="Opacity" Value="0.78"/></Trigger></Style.Triggers></Style>
 <Style TargetType="Rectangle"><Style.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter Property="Opacity" Value="0.78"/></Trigger></Style.Triggers></Style>
-<Style TargetType="ToolTip"><Setter Property="Background" Value="#1F1B16"/><Setter Property="Foreground" Value="#F6EBD9"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Padding" Value="9,5"/></Style>
+<Style TargetType="ToolTip"><Setter Property="Background" Value="#1F1B17"/><Setter Property="Foreground" Value="#F6EBD9"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Padding" Value="9,5"/></Style>
 '@
 
 function New-ChartCard([string]$title, [string]$sub, [string]$body, [int]$span = 1) {
@@ -6537,7 +6614,7 @@ function New-ChartCard([string]$title, [string]$sub, [string]$body, [int]$span =
     $x = "<Border $XNS Background=""#FFFCF6"" BorderBrush=""#E2D9C9"" BorderThickness=""1"" CornerRadius=""10"" Padding=""18,16"" Margin=""0,0,14,14"">" +
          "<Border.Resources>$ChartStyles</Border.Resources><StackPanel>" +
          "<TextBlock Text=""$(X $title)"" FontFamily=""Georgia"" FontSize=""19"" Margin=""0,0,0,2""/>$subXml$body</StackPanel></Border>"
-    try { return [Windows.Markup.XamlReader]::Parse($x) }
+    try { return [Windows.Markup.XamlReader]::Parse((Convert-PHColour $x)) }
     catch { Write-Log "Chart '$title' failed: $($_.Exception.Message)"; return $null }
 }
 
@@ -6684,7 +6761,7 @@ function Write-ChartError([string]$name, $err) {
     $note = "<Border $XNS Background=""#FFFCF6"" BorderBrush=""#E2D9C9"" BorderThickness=""1"" CornerRadius=""10"" Padding=""18,16"" Margin=""0,0,14,14""><StackPanel>" +
             "<TextBlock Text=""$(X $name)"" FontFamily=""Georgia"" FontSize=""19""/>" +
             "<TextBlock Text=""Couldn't draw this chart — details are in the log (Utilities → Open the log)"" Foreground=""#7B7266"" FontStyle=""Italic"" Margin=""0,6,0,0""/></StackPanel></Border>"
-    try { [void]$UI.ugCharts.Children.Add([Windows.Markup.XamlReader]::Parse($note)) } catch {}
+    try { [void]$UI.ugCharts.Children.Add([Windows.Markup.XamlReader]::Parse((Convert-PHColour $note))) } catch {}
 }
 
 function Build-StatCharts($vis) {
@@ -6909,7 +6986,9 @@ $Script:RelDlg = $null
 function Show-ReleasePicker([int]$movieId, [string]$label, [string]$current, [int]$tmdbId) {
     if ($movieId -le 0) { return }
     [xml]$dx = $ReleaseDialogXaml.Replace('<!--COMBOSTYLES-->', $ComboStyles + $DialogStyles).Replace('<!--HEADER-->', (New-DialogHeader 'Choose a copy'))
+    $dx = [xml](Convert-PHColour $dx.OuterXml)
     $dw = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $dx))
+    $dw.Add_SourceInitialized({ Set-PHTitleBar $this })
     $dw.Owner = $Window
     $d = @{ Win = $dw; MovieId = $movieId; Label = $label; TmdbId = $tmdbId; Items = $null; Loading = $true
             List = $dw.FindName('rList'); Go = $dw.FindName('rGo'); Picked = $dw.FindName('rPicked'); Count = $dw.FindName('rCount')
@@ -7189,7 +7268,7 @@ function Refresh-Picks {
         }
         [pscustomobject]@{ Pct = [double][math]::Max(0, $pct); PctVis = $(if ($st -eq 'downloading' -and $pct -ge 0) { 'Visible' } else { 'Collapsed' })
                            Title = [string]$pk['Title']; Detail = "$($pk['Quality'])  ·  $($pk['Size'])  ·  $($pk['Release'])"; StateText = $text
-                           StateBrush = $(if ($st -eq 'stuck') { '#C8432B' } else { '#173F3E' })
+                           StateBrush = $(if ($st -eq 'stuck') { '#C8432B' } else { $(if ($Script:PHDark) { '#8CC9C3' } else { '#173F3E' }) })
                            ImportTag = "import|$($pk['MovieId'])"; ImportVis = $(if ($st -eq 'stuck') { 'Visible' } else { 'Collapsed' }); ForgetTag = "forget|$($pk['MovieId'])" }
     }
     $rows = @($rows)
@@ -7263,7 +7342,9 @@ $AboutDialogXaml = @'
 '@
 function Show-About {
     [xml]$dx = $AboutDialogXaml.Replace('<!--COMBOSTYLES-->', $ComboStyles + $DialogStyles)
+    $dx = [xml](Convert-PHColour $dx.OuterXml)
     $dw = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $dx))
+    $dw.Add_SourceInitialized({ Set-PHTitleBar $this })
     $dw.Owner = $Window
     $dw.FindName('aVersion').Text = "Version $AppVersion  ·  Windows PowerShell $($PSVersionTable.PSVersion.Major).$($PSVersionTable.PSVersion.Minor)"
     $dw.FindName('aData').Text = "Everything Picture House stores is in $DataDir"
@@ -7421,7 +7502,9 @@ function New-UtilDialog([string]$title, [string]$heading, [int]$width, [string]$
     $enc = { param($t) [Security.SecurityElement]::Escape([string]$t) }
     $x = $x.Replace('#TITLE#', (& $enc $title)).Replace('#WIDTH#', [string]$width).Replace('#OK#', (& $enc $okText)).Replace('#BODY#', $body)
     [xml]$dx = $x.Replace('<!--COMBOSTYLES-->', $ComboStyles + $DialogStyles).Replace('<!--HEADER-->', (New-DialogHeader (& $enc $heading)))
+    $dx = [xml](Convert-PHColour $dx.OuterXml)
     $dw = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $dx))
+    $dw.Add_SourceInitialized({ Set-PHTitleBar $this })
     $dw.Owner = $Window
     $dw.FindName('uOk').Add_Click({ param($s, $e) [Windows.Window]::GetWindow($s).DialogResult = $true })
     return $dw
@@ -7452,7 +7535,7 @@ function New-CompareGrid([string]$leftHead, $left, [string]$rightHead, $right) {
         $r++
     }
     $b = New-Object Windows.Controls.Border
-    $b.Background = (New-Object Windows.Media.BrushConverter).ConvertFromString('#FFFCF6'); $b.BorderBrush = (New-Object Windows.Media.BrushConverter).ConvertFromString('#E2D9C9')
+    $b.Background = (New-Object Windows.Media.BrushConverter).ConvertFromString((Convert-PHColour '#FFFCF6')); $b.BorderBrush = (New-Object Windows.Media.BrushConverter).ConvertFromString((Convert-PHColour '#E2D9C9'))
     $b.BorderThickness = 1; $b.CornerRadius = 8; $b.Padding = (New-Object Windows.Thickness 14, 8, 14, 8); $b.Margin = (New-Object Windows.Thickness 0, 10, 0, 6)
     $b.Child = $g
     return $b
@@ -8044,7 +8127,7 @@ $UI.btnMore.Add_Click({
         if (-not $btn -or $btn.Visibility -ne 'Visible' -or -not $btn.IsEnabled) { return }
         $mi = New-Object Windows.Controls.MenuItem; $mi.Header = $text; $mi.Tag = $btn
         $ic = New-Object Windows.Controls.TextBlock; $ic.Text = $glyph; $ic.FontFamily = 'Segoe Fluent Icons, Segoe MDL2 Assets'; $ic.FontSize = 14
-        $ic.Foreground = (New-Object Windows.Media.BrushConverter).ConvertFromString('#173F3E'); $mi.Icon = $ic
+        $ic.Foreground = (New-Object Windows.Media.BrushConverter).ConvertFromString($(if ($Script:PHDark) { '#8CC9C3' } else { '#173F3E' })); $mi.Icon = $ic
         $mi.Add_Click({ $b = $this.Tag; if ($b -eq $UI.btnMove) { Show-MoveMenu $Script:CurKey $UI.btnMore } else { $b.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Button]::ClickEvent))) } })
         [void]$cm.Items.Add($mi)
     }

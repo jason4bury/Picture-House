@@ -7,6 +7,21 @@ The same list is in the app under **Settings → Version history**.
 
 ## [Unreleased]
 
+## [1.03] - 2026-11-19
+
+### Added
+- **A dark look.** Settings has a new **Look** card: **Light** (the cream look, as before, and the
+  default), **Dark**, or **Follow Windows**. In the dark look the paper, cards, lines and text go
+  dark in every window, chart and dialog, with a dark title bar; the teal header bands, the red
+  buttons, the cream text on them and the shelf colours stay the same. The look is chosen when
+  Picture House starts, so a change shows the next time it starts. Exports (web catalogue,
+  reports, printable list) keep the cream look.
+
+### Changed
+- Tick boxes, option buttons, lists, tables and the Settings fields take their text colour from the
+  look instead of Windows' default black.
+- Version history (Settings) notes what's new in 1.03.
+
 ## [1.02] - 2026-11-18
 
 ### Changed
