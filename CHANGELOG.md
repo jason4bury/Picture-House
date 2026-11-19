@@ -7,6 +7,25 @@ The same list is in the app under **Settings → Version history**.
 
 ## [Unreleased]
 
+## [1.02] - 2026-11-18
+
+### Changed
+- **Messages and questions in Picture House's own look.** Every message and Yes/No question
+  (about 100 of them) used Windows' plain grey message box. They now open in a Picture House
+  window: cream background, teal header band, a coloured badge (teal for information, amber for a
+  warning, dark teal for a question) and the app's red and cream pill buttons. Enter presses the
+  red button and Esc the other one.
+- They open over whichever Picture House window is in front (for example **Fix match** or
+  **Choose a copy**), not always over the main window, and the text can be selected and copied.
+- **Clear all data** asks about a backup with plain buttons (**Back up, then clear**,
+  **Clear without a backup**, **Don't clear anything**) instead of Yes / No / Cancel.
+- **Web catalogue** asks **Put posters in the file** or **Load posters from TMDb** instead of
+  Yes / No, and has a **Cancel** button.
+- The one-time warning if moving your old `Data` folder fails uses the same window.
+
+Kept as they were: Windows' own Open, Save and folder pickers, and the plain box that says
+Picture House couldn't open (it has to work even when the window can't be built).
+
 ## [1.01] - 2026-11-16
 
 ### Changed

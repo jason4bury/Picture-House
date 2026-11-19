@@ -262,7 +262,7 @@ $ComboStyles = @'
 '@
 
 $AppName    = 'Picture House'
-$AppVersion = '1.01'   # <major>.<two-digit minor>; matches CHANGELOG.md and the release folder name
+$AppVersion = '1.02'   # <major>.<two-digit minor>; matches CHANGELOG.md and the release folder name
 $AppId      = 'jason4bury.Picture-House'   # taskbar ID; the same as the shortcut's (src\New-PictureHouseShortcut.ps1)
 
 # ---- WPF needs an STA thread -------------------------------------------------------
@@ -383,53 +383,6 @@ function Stop-Startup([string]$why) {
     [void][Windows.MessageBox]::Show("Picture House couldn't open.`n`n$why`n`nThe details are in $($Files.Log)", 'Picture House', 'OK', 'Error')
     exit 1
 }
-# ---- One-time move from the old "Data" folder beside the script (Picture House 1.3.x and earlier) ----
-# Looks beside the script and one folder up (the old repo root, when the script is now in src\).
-# The old folder is copied, never deleted, then renamed "Data (moved to AppData)" so it's only used once.
-# settings.json is copied last, so a move that stops half-way is simply tried again next time.
-function Move-OldDataFolder {
-    if (Test-Path -LiteralPath (Join-Path $DataDir 'settings.json')) { return }
-    $old = $null
-    foreach ($cand in @((Join-Path $Base 'Data'), (Join-Path (Split-Path -Parent $Base) 'Data'))) {
-        if (Test-Path -LiteralPath (Join-Path $cand 'settings.json')) { $old = $cand; break }
-    }
-    if (-not $old) { return }
-    Write-Log "Moving data from $old to $DataDir…"
-    if ($Script:Splash) {
-        try { $Script:Splash.Content.Children[1].Text = 'Moving your data to its new home…'; $Script:Splash.Dispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::Background) } catch {}
-    }
-    try {
-        $items = @(Get-ChildItem -LiteralPath $old -Force | Sort-Object { $_.Name -eq 'settings.json' })
-        foreach ($item in $items) {
-            $dest = Join-Path $DataDir $item.Name
-            if (-not (Test-Path -LiteralPath $dest)) { Copy-Item -LiteralPath $item.FullName -Destination $dest -Recurse -Force -ErrorAction Stop }
-        }
-        $newName = 'Data (moved to AppData)'
-        if (-not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $old) $newName))) {
-            try { Rename-Item -LiteralPath $old -NewName $newName -ErrorAction Stop } catch { Write-Log "Couldn't rename the old Data folder: $($_.Exception.Message)" }
-        }
-        Write-Log 'Data moved.'
-    } catch {
-        Write-Log "Moving the old Data folder stopped: $($_.Exception.Message)"
-        [void][Windows.MessageBox]::Show("Picture House couldn't finish moving your data from`n$old`nto`n$DataDir`n`n$($_.Exception.Message)`n`nNothing has been deleted. It will try again next time, or you can copy the files across yourself.", $AppName, 'OK', 'Warning')
-    }
-}
-Move-OldDataFolder
-foreach ($d in @($CacheDir, (Join-Path $CacheDir 'posters'), (Join-Path $CacheDir 'thumbs'),
-                 (Join-Path $CacheDir 'backdrops'), (Join-Path $DataDir 'Exports'))) {
-    if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) }
-}
-
-Write-Log "Opening Picture House $AppVersion (process $PID)…"
-# tidy the Data folder: files older versions used, and keep the launch log short
-foreach ($old in 'people-depts.json', 'console.log') { $f = Join-Path $DataDir $old; if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue } }
-try { $ll = Join-Path $DataDir 'launch.log'; if (Test-Path -LiteralPath $ll) { $lines = @(Get-Content -LiteralPath $ll); if ($lines.Count -gt 200) { Set-Content -LiteralPath $ll -Value ($lines | Select-Object -Last 200) } } } catch {}
-# keep only the last few launcher console logs (empty ones mean that start was fine)
-try { Get-ChildItem -LiteralPath $DataDir -Filter 'console-*.log' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -Skip 10 | Remove-Item -Force -ErrorAction SilentlyContinue } catch {}
-
-# =====================================================================================
-#  Shared code — loaded into the main window AND into every background worker
-# =====================================================================================
 # Pop-up windows share the app's look: red / cream pill buttons and a teal header band
 $DialogStyles = @'
     <Style x:Key="PHDlgPrimary" TargetType="Button">
@@ -459,6 +412,132 @@ function New-DialogHeader([string]$title) {
            '<TextBlock Text="' + $title + '" FontFamily="Georgia" FontSize="22" Foreground="#F6EBD9" Margin="0,4,0,0"/></StackPanel></Border>'
 }
 
+# Message and question boxes in Picture House's own look (they replace Windows' plain grey MessageBox).
+# $kind: Information, Warning, Error or Question. $buttons: the first is the main (red) button and is pressed by Enter;
+# the last is pressed by Esc or the window's X. Returns the text of the button pressed.
+$Script:MsgKinds = @{
+    Information = @{ Glyph = 'i'; Color = '#2A7F7A'; Heading = 'Good to know' }
+    Warning     = @{ Glyph = '!'; Color = '#D9902F'; Heading = 'Heads up' }
+    Error       = @{ Glyph = '×'; Color = '#C8432B'; Heading = 'Something went wrong' }
+    Question    = @{ Glyph = '?'; Color = '#173F3E'; Heading = 'Just checking' }
+}
+function Show-PHMessage([string]$msg, [string]$kind = 'Information', [string[]]$buttons = @('OK'), $owner = $null, [string]$heading = '') {
+    if (-not $Script:MsgKinds.ContainsKey($kind)) { $kind = 'Information' }
+    $k = $Script:MsgKinds[$kind]
+    if (-not $heading) { $heading = $k.Heading }
+    if (-not $buttons -or $buttons.Count -eq 0) { $buttons = @('OK') }
+    $cancel = $buttons[-1]
+    # sit on top of whichever Picture House window is in front (the main window, or a dialog that's open)
+    if (-not $owner) {
+        try {
+            if ($Window -and $Window.IsVisible) {
+                $owner = $Window
+                foreach ($w in $Window.OwnedWindows) { if ($w.IsVisible -and $w.IsActive) { $owner = $w } }
+            }
+        } catch { $owner = $null }
+    }
+    # wide enough for the buttons in one row (about 7.5 px a letter plus padding), and wider for a long message
+    $need = 54; foreach ($bt in $buttons) { $need += [int]($bt.Length * 7.5) + 46 }
+    $width = 460; if ($msg.Length -gt 380) { $width = 560 }; if ($need -gt $width) { $width = [math]::Min(720, $need) }
+    $x = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Picture House" Width="#WIDTH#" SizeToContent="Height" WindowStartupLocation="CenterOwner" Background="#F3EEE4"
+        FontFamily="Segoe UI" FontSize="13" ResizeMode="NoResize" ShowInTaskbar="False">
+  <Window.Resources><!--STYLES--></Window.Resources>
+  <DockPanel>
+  <!--HEADER-->
+  <StackPanel Margin="22,18,22,20">
+    <Grid>
+      <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+      <Border x:Name="mBadge" Width="30" Height="30" CornerRadius="15" VerticalAlignment="Top" Margin="0,1,14,0">
+        <TextBlock x:Name="mGlyph" FontFamily="Georgia" FontSize="17" FontWeight="Bold" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-2,0,0"/>
+      </Border>
+      <ScrollViewer Grid.Column="1" MaxHeight="420" VerticalScrollBarVisibility="Auto">
+        <TextBox x:Name="mText" IsReadOnly="True" IsTabStop="False" TextWrapping="Wrap" BorderThickness="0" Background="Transparent"
+                 Foreground="#2B2620" Padding="0" Margin="0,5,0,0"/>
+      </ScrollViewer>
+    </Grid>
+    <StackPanel x:Name="mButtons" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0"/>
+  </StackPanel>
+  </DockPanel>
+</Window>
+'@
+    $enc = { param($t) [Security.SecurityElement]::Escape([string]$t) }
+    $x = $x.Replace('#WIDTH#', [string]$width).Replace('<!--STYLES-->', $DialogStyles).Replace('<!--HEADER-->', (New-DialogHeader (& $enc $heading)))
+    [xml]$dx = $x
+    $dw = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $dx))
+    if ($Script:AppIcon) { try { $dw.Icon = $Script:AppIcon } catch {} }
+    if ($owner) { try { $dw.Owner = $owner } catch { $owner = $null } }
+    if (-not $owner) { $dw.WindowStartupLocation = 'CenterScreen'; $dw.Topmost = $true; $dw.ShowInTaskbar = $true }
+    $bc = New-Object Windows.Media.BrushConverter
+    $dw.FindName('mBadge').Background = $bc.ConvertFromString($k.Color)
+    $dw.FindName('mGlyph').Text = $k.Glyph
+    $dw.FindName('mText').Text = $msg
+    $panel = $dw.FindName('mButtons')
+    # the main button goes on the right, as in Picture House's other windows
+    for ($i = $buttons.Count - 1; $i -ge 0; $i--) {
+        $b = New-Object Windows.Controls.Button
+        $b.Content = $buttons[$i]; $b.Tag = $buttons[$i]
+        if ($i -eq 0) { $b.Style = $dw.FindResource('PHDlgPrimary'); $b.IsDefault = $true }
+        else { $b.Style = $dw.FindResource('PHDlgGhost') }
+        if ($i -eq $buttons.Count - 1) { $b.IsCancel = $true }
+        if ($i -gt 0) { $b.Margin = New-Object Windows.Thickness 0, 0, 8, 0 }
+        $b.Add_Click({ param($s, $e) $w = [Windows.Window]::GetWindow($s); $w.Tag = [string]$s.Tag; $w.Close() })
+        [void]$panel.Children.Add($b)
+    }
+    $dw.Add_ContentRendered({ param($s, $e) try { $s.FindName('mButtons').Children[$s.FindName('mButtons').Children.Count - 1].Focus() | Out-Null } catch {} })
+    [void]$dw.ShowDialog()
+    if ($dw.Tag) { return [string]$dw.Tag }
+    return $cancel
+}
+
+# ---- One-time move from the old "Data" folder beside the script (Picture House 1.3.x and earlier) ----
+# Looks beside the script and one folder up (the old repo root, when the script is now in src\).
+# The old folder is copied, never deleted, then renamed "Data (moved to AppData)" so it's only used once.
+# settings.json is copied last, so a move that stops half-way is simply tried again next time.
+function Move-OldDataFolder {
+    if (Test-Path -LiteralPath (Join-Path $DataDir 'settings.json')) { return }
+    $old = $null
+    foreach ($cand in @((Join-Path $Base 'Data'), (Join-Path (Split-Path -Parent $Base) 'Data'))) {
+        if (Test-Path -LiteralPath (Join-Path $cand 'settings.json')) { $old = $cand; break }
+    }
+    if (-not $old) { return }
+    Write-Log "Moving data from $old to $DataDir…"
+    if ($Script:Splash) {
+        try { $Script:Splash.Content.Children[1].Text = 'Moving your data to its new home…'; $Script:Splash.Dispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::Background) } catch {}
+    }
+    try {
+        $items = @(Get-ChildItem -LiteralPath $old -Force | Sort-Object { $_.Name -eq 'settings.json' })
+        foreach ($item in $items) {
+            $dest = Join-Path $DataDir $item.Name
+            if (-not (Test-Path -LiteralPath $dest)) { Copy-Item -LiteralPath $item.FullName -Destination $dest -Recurse -Force -ErrorAction Stop }
+        }
+        $newName = 'Data (moved to AppData)'
+        if (-not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $old) $newName))) {
+            try { Rename-Item -LiteralPath $old -NewName $newName -ErrorAction Stop } catch { Write-Log "Couldn't rename the old Data folder: $($_.Exception.Message)" }
+        }
+        Write-Log 'Data moved.'
+    } catch {
+        Write-Log "Moving the old Data folder stopped: $($_.Exception.Message)"
+        [void](Show-PHMessage "Picture House couldn't finish moving your data from`n$old`nto`n$DataDir`n`n$($_.Exception.Message)`n`nNothing has been deleted. It will try again next time, or you can copy the files across yourself." 'Warning' @('OK') $null "Your data didn't finish moving")
+    }
+}
+Move-OldDataFolder
+foreach ($d in @($CacheDir, (Join-Path $CacheDir 'posters'), (Join-Path $CacheDir 'thumbs'),
+                 (Join-Path $CacheDir 'backdrops'), (Join-Path $DataDir 'Exports'))) {
+    if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) }
+}
+
+Write-Log "Opening Picture House $AppVersion (process $PID)…"
+# tidy the Data folder: files older versions used, and keep the launch log short
+foreach ($old in 'people-depts.json', 'console.log') { $f = Join-Path $DataDir $old; if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue } }
+try { $ll = Join-Path $DataDir 'launch.log'; if (Test-Path -LiteralPath $ll) { $lines = @(Get-Content -LiteralPath $ll); if ($lines.Count -gt 200) { Set-Content -LiteralPath $ll -Value ($lines | Select-Object -Last 200) } } } catch {}
+# keep only the last few launcher console logs (empty ones mean that start was fine)
+try { Get-ChildItem -LiteralPath $DataDir -Filter 'console-*.log' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -Skip 10 | Remove-Item -Force -ErrorAction SilentlyContinue } catch {}
+
+# =====================================================================================
+#  Shared code — loaded into the main window AND into every background worker
+# =====================================================================================
 $SharedCode = @'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
@@ -2674,8 +2753,9 @@ function Format-Size([double]$b) {
 function Get-Initials([string]$n) { if (-not $n) { return '' }; $p = @($n -split '\s+' | Where-Object { $_ }); if ($p.Count -ge 2) { return ($p[0][0].ToString() + $p[-1][0].ToString()).ToUpper() }; return $n.Substring(0, [math]::Min(2, $n.Length)).ToUpper() }
 function Get-SortTitle([string]$t) { if (-not $t) { return '' }; return ([regex]::Replace($t, '^(?i)(the|a|an)\s+', '')).ToLowerInvariant() }
 function Status([string]$t) { $UI.txtStatus.Text = $t }
-function Ask([string]$msg) { return ([Windows.MessageBox]::Show($Window, $msg, $AppName, 'YesNo', 'Question') -eq 'Yes') }
-function Tell([string]$msg, [string]$icon = 'Information') { [void][Windows.MessageBox]::Show($Window, $msg, $AppName, 'OK', $icon) }
+# Ask a Yes/No question, or tell something with an OK button, in Picture House's own message box (Show-PHMessage)
+function Ask([string]$msg, $owner = $null) { return ((Show-PHMessage $msg 'Question' @('Yes', 'No') $owner) -eq 'Yes') }
+function Tell([string]$msg, [string]$icon = 'Information', $owner = $null) { [void](Show-PHMessage $msg $icon @('OK') $owner) }
 function Open-Url([string]$u) { try { Start-Process $u } catch { Tell "Couldn't open $u" 'Warning' } }
 
 function Load-Bitmap([string]$path, [int]$w = 0) {
@@ -4480,7 +4560,7 @@ function Show-FixMatch([string]$key) {
                 $yy = ''; if ($_.release_date -and ([string]$_.release_date).Length -ge 4) { $yy = ([string]$_.release_date).Substring(0, 4) }
                 [pscustomobject]@{ Id = [int]$_.id; Label = ([string]$_.title + $(if ($yy) { " ($yy)" } else { '' })); Overview = [string]$_.overview; Poster = (PH-ImgUrl $_.poster_path 'w92') } })
             if (@($d.List.Items).Count) { $d.List.SelectedIndex = 0 }
-        } catch { [void][Windows.MessageBox]::Show($d.Win, ('TMDb search failed: ' + $_.Exception.Message), $AppName) }
+        } catch { Tell ('TMDb search failed: ' + $_.Exception.Message) 'Warning' $d.Win }
         finally { $d.Win.Cursor = $null }
     }
     $Script:Dlg.Search = $search
@@ -4490,7 +4570,7 @@ function Show-FixMatch([string]$key) {
         if ($idText -match '^\d+$') { $d.Result = @{ Tmdb = [int]$idText } }
         elseif ($idText -match '^(tt\d+)$') {
             try { $f = PH-Tmdb $Settings.TmdbKey "/find/$idText" @{ external_source = 'imdb_id' }; if ($f -and @($f.movie_results).Count) { $d.Result = @{ Tmdb = [int]@($f.movie_results)[0].id } } } catch {}
-            if (-not $d.Result) { [void][Windows.MessageBox]::Show($d.Win, "TMDb doesn't know $idText.", $AppName); return }
+            if (-not $d.Result) { Tell "TMDb doesn't know $idText." 'Information' $d.Win; return }
         }
         elseif ($d.List.SelectedItem) { $d.Result = @{ Tmdb = [int]$d.List.SelectedItem.Id } }
         else { return }
@@ -6184,9 +6264,9 @@ function Clear-AllData {
            "Kept: your settings (NAS folders, keys, player), exported files and the log.`n`n" +
            "Nothing on the NAS is touched — no films or folders are deleted."
     if (-not (Ask $msg)) { return }
-    $ans = [Windows.MessageBox]::Show($Window, "Make a backup first?`n`nYes — save a backup, then clear`nNo — clear without a backup`nCancel — don't clear anything", $AppName, 'YesNoCancel', 'Warning')
-    if ($ans -eq 'Cancel') { return }
-    if ($ans -eq 'Yes') {
+    $ans = Show-PHMessage "Make a backup first?`n`nWith a backup you can put everything back later with Restore from backup." 'Warning' @('Back up, then clear', 'Clear without a backup', "Don't clear anything")
+    if ($ans -eq "Don't clear anything") { return }
+    if ($ans -eq 'Back up, then clear') {
         Backup-PictureHouse
         if (-not (Ask 'Backup done. Clear all data now?')) { return }
     }
@@ -6261,7 +6341,9 @@ function Export-HealthCsv {
 }
 
 function Export-HtmlCatalogue {
-    $embed = Ask "Make a web catalogue of your films.`n`nInclude the poster pictures inside the file? (Yes = works offline but the file is bigger; No = posters load from TMDb when online.)"
+    $ans = Show-PHMessage "Make a web catalogue of your films.`n`nPut the poster pictures inside the file? It then works offline, but the file is bigger. Otherwise the posters load from TMDb when you're online." 'Question' @('Put posters in the file', 'Load posters from TMDb', 'Cancel')
+    if ($ans -eq 'Cancel') { return }
+    $embed = ($ans -eq 'Put posters in the file')
     Status 'Building the web catalogue…'
     $Window.Cursor = [Windows.Input.Cursors]::Wait
     try {
@@ -6401,6 +6483,10 @@ function Find-ZoomPlayer {
 
 $AboutText = @"
 Picture House $AppVersion — a film library for the shelves on your NAS.
+
+New in 1.02 (18 November 2026)
+•  Messages and questions now come up in Picture House's own look (cream window, teal header, red and cream buttons) instead of Windows' plain grey box. They sit over whichever Picture House window is open, and you can select and copy their text.
+•  Clear all data asks about a backup with plain buttons: "Back up, then clear", "Clear without a backup" or "Don't clear anything". The web catalogue asks "Put posters in the file" or "Load posters from TMDb", and can be cancelled.
 
 New in 1.01 (16 November 2026)
 •  No exe any more. Antivirus programs kept flagging the exe as a threat by mistake, so Picture House now comes as its script with a "Picture House.cmd" that makes a shortcut (in its folder and the Start menu) and starts it without a console window.
@@ -6930,7 +7016,7 @@ function Invoke-ReleaseGrab {
     $msg = "Download this copy of $($d.Label)?`n`n$($it.Title)`n$($it.Quality)  ·  $($it.SizeText)  ·  $($it.Indexer)$(if ($it.PeersText) { '  ·  ' + $it.PeersText })`n`n" +
            "Radarr sends it to your download client now, and swaps it in for your current copy when the download finishes."
     if ($it.Rejected) { $msg += "`n`nHeads up — Radarr would normally refuse this one: $($it.RejectText.Replace('Radarr would refuse this: ', ''))" }
-    if ([Windows.MessageBox]::Show($d.Win, $msg, $AppName, 'YesNo', 'Question') -ne 'Yes') { return }
+    if (-not (Ask $msg $d.Win)) { return }
     $vars = @{ Guid = [string]$it.Guid; IndexerId = [int]$it.IndexerId; Release = [string]$it.Title; Label = $d.Label; MovieId = $d.MovieId; TmdbId = $d.TmdbId; Quality = $it.Quality; Size = $it.SizeText }
     $d.Win.Close()
     Show-Toast "Sending your pick to Radarr…" "$($vars.Quality)  ·  $($vars.Size)" 'wait' 5
