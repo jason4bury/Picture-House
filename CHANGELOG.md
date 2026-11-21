@@ -7,6 +7,13 @@ The same list is in the app under **Settings → Version history**.
 
 ## [Unreleased]
 
+## [1.04] - 2026-11-21
+
+### Changed
+- **Film info in your own language to begin with.** A new install takes the language and region for
+  TMDb from Windows' own settings instead of English (UK). Both can still be changed in Settings, and
+  existing settings are kept.
+
 ## [1.03] - 2026-11-19
 
 ### Added

@@ -262,7 +262,7 @@ $ComboStyles = @'
 '@
 
 $AppName    = 'Picture House'
-$AppVersion = '1.03'   # <major>.<two-digit minor>; matches CHANGELOG.md and the release folder name
+$AppVersion = '1.04'   # <major>.<two-digit minor>; matches CHANGELOG.md and the release folder name
 $AppId      = 'jason4bury.Picture-House'   # taskbar ID; the same as the shortcut's (src\New-PictureHouseShortcut.ps1)
 
 # ---- WPF needs an STA thread -------------------------------------------------------
@@ -2689,9 +2689,14 @@ $Window.Dispatcher.Add_UnhandledException({
 # =====================================================================================
 #  Settings & data
 # =====================================================================================
+# Film info in the PC's own language and release dates for its own country, to begin with
+# (Windows' language and region settings); both can be changed in Settings.
+function Get-DefaultLanguage { try { $c = (Get-Culture).Name; if ($c -match '^[a-z]{2}-[A-Z]{2}$') { return $c } } catch { Write-Verbose 'no culture' }; return 'en-US' }
+function Get-DefaultRegion { try { $r = [Globalization.RegionInfo]::CurrentRegion.TwoLetterISORegionName; if ($r -match '^[A-Z]{2}$') { return $r } } catch { Write-Verbose 'no region' }; return 'US' }
+
 function New-DefaultSettings {
     return @{
-        Roots = @(); PlayerPath = ''; TmdbKey = ''; Language = 'en-GB'; Region = 'GB'
+        Roots = @(); PlayerPath = ''; TmdbKey = ''; Language = (Get-DefaultLanguage); Region = (Get-DefaultRegion)
         RadarrUrl = ''; RadarrKey = ''; RadarrProfileId = 0; RadarrProfileName = ''; RadarrProfileList = @(); RadarrRoot = ''
         SeerrUrl = ''; SeerrKey = ''; UseNfo = $true; AutoFetch = $false; WatchedOnPlay = $false
         HiddenShelves = @(); Sort = 'Title A–Z'; Group = 'None'; View = 'Posters'
@@ -6529,8 +6534,8 @@ function Save-SettingsUi {
     $lookWas = [string]$Settings.Look
     $Settings.Look = $(if ($UI.rbLookDark.IsChecked) { 'Dark' } elseif ($UI.rbLookSystem.IsChecked) { 'System' } else { 'Light' })
     $Settings.TmdbKey = $UI.pwTmdb.Password.Trim()
-    $Settings.Language = $(if ($UI.txtLang.Text.Trim()) { $UI.txtLang.Text.Trim() } else { 'en-GB' })
-    $Settings.Region = $(if ($UI.txtRegion.Text.Trim()) { $UI.txtRegion.Text.Trim().ToUpperInvariant() } else { 'GB' })
+    $Settings.Language = $(if ($UI.txtLang.Text.Trim()) { $UI.txtLang.Text.Trim() } else { Get-DefaultLanguage })
+    $Settings.Region = $(if ($UI.txtRegion.Text.Trim()) { $UI.txtRegion.Text.Trim().ToUpperInvariant() } else { Get-DefaultRegion })
     $Settings.AutoFetch = [bool]$UI.chkAutoFetch.IsChecked
     $Settings.RadarrUrl = Normalize-ServiceUrl $UI.txtRadarrUrl.Text; $UI.txtRadarrUrl.Text = $Settings.RadarrUrl
     $Settings.RadarrKey = $UI.pwRadarr.Password.Trim()
@@ -8316,7 +8321,7 @@ $UI.btnPlayerDetect.Add_Click({
 $UI.btnTmdbTest.Add_Click({
     $k = $UI.pwTmdb.Password.Trim(); if (-not $k) { Tell 'Paste your TMDb key first.'; return }
     $Window.Cursor = [Windows.Input.Cursors]::Wait
-    try { $r = PH-Tmdb $k '/movie/603' @{ language = 'en-GB' }; if ($r -and $r.title) { Tell "TMDb is happy — test lookup returned ‘$($r.title)’." } else { Tell 'TMDb answered, but oddly. Check the key.' 'Warning' } }
+    try { $r = PH-Tmdb $k '/movie/603' @{ language = $Settings.Language }; if ($r -and $r.title) { Tell "TMDb is happy — test lookup returned ‘$($r.title)’." } else { Tell 'TMDb answered, but oddly. Check the key.' 'Warning' } }
     catch { Tell ("TMDb said no:`n" + $_.Exception.Message) 'Warning' }
     finally { $Window.Cursor = $null }
 })
