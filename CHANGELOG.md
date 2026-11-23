@@ -7,6 +7,11 @@ The same list is in the app under **Settings → Version history**.
 
 ## [Unreleased]
 
+## [1.05] - 2026-11-23
+### Changed
+- **Folders to ignore** starts blank on a new install (it used to list Intros and Seerr). Settings already saved
+  keep their list.
+
 ## [1.04] - 2026-11-21
 
 ### Changed

@@ -262,7 +262,7 @@ $ComboStyles = @'
 '@
 
 $AppName    = 'Picture House'
-$AppVersion = '1.04'   # <major>.<two-digit minor>; matches CHANGELOG.md and the release folder name
+$AppVersion = '1.05'   # <major>.<two-digit minor>; matches CHANGELOG.md and the release folder name
 $AppId      = 'jason4bury.Picture-House'   # taskbar ID; the same as the shortcut's (src\New-PictureHouseShortcut.ps1)
 
 # ---- WPF needs an STA thread -------------------------------------------------------
@@ -2700,7 +2700,7 @@ function New-DefaultSettings {
         RadarrUrl = ''; RadarrKey = ''; RadarrProfileId = 0; RadarrProfileName = ''; RadarrProfileList = @(); RadarrRoot = ''
         SeerrUrl = ''; SeerrKey = ''; UseNfo = $true; AutoFetch = $false; WatchedOnPlay = $false
         HiddenShelves = @(); Sort = 'Title A–Z'; Group = 'None'; View = 'Posters'
-        IgnoreFolders = 'Intros, Seerr'
+        IgnoreFolders = ''; SeerrIgnoreAdded = $true   # nothing ignored to begin with (the one-off Seerr step below is for old settings only)
         Extensions = '.mkv .mp4 .avi .m4v .mov .wmv .ts .m2ts .iso .mpg .mpeg .vob .webm .divx'
         LastScan = ''; WinW2 = 0; WinH2 = 0; WinMax2 = $false; WinCustom = $false; UiZoom = 100; DetailOpen = $true
         Look = 'Light'   # Light (cream), Dark, or System (follow Windows); used from the next start
@@ -2738,7 +2738,7 @@ $j = PH-LoadJson $Files.Colls
 if ($j) { foreach ($k in @($j.Keys)) { $Script:Colls[$k] = $j[$k] } }
 Remove-Variable j, loaded -ErrorAction SilentlyContinue
 
-# ---- folders to ignore (e.g. Intros) --------------------------------------------------
+# ---- folders to ignore (such as a folder of trailers) --------------------------------------------------
 function Get-IgnoreNames { return @(([string]$Settings.IgnoreFolders) -split '[,;]' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ }) }
 function Set-IgnoreNames { $Global:PH_UserSkip = @(Get-IgnoreNames) }
 function Test-IgnoredPath([string]$p) {
@@ -8417,7 +8417,7 @@ COMING SOON
 • Appears in the rail once Radarr is set up: films Radarr is waiting for that aren't out yet, grouped by month,
   with their cinema / digital / disc dates and a countdown. Double-click one to open it in Radarr.
 • The dates under each poster say whether it's in cinemas yet; hover for cinema, digital and disc dates.
-• Folders named in Settings → Folders to ignore (Intros and Seerr by default) are skipped everywhere.
+• Folders named in Settings → Folders to ignore (none to begin with) are skipped everywhere.
 • Their empty folders on the NAS are not counted as problems. Once a release date passes and the film still hasn't
   arrived, Health lists it as "Released — still missing".
 

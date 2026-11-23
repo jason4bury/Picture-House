@@ -6,7 +6,7 @@
 
 A film library for the films on your NAS: posters, film info, cast, collections, stats, and your own watched history and ratings, in a PowerShell/WPF window on your PC.
 
-![Version](https://img.shields.io/badge/version-v1.04-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Picture-House)
+![Version](https://img.shields.io/badge/version-v1.05-blue) ![Platform](https://img.shields.io/badge/platform-Windows-0078D6) ![PowerShell](https://img.shields.io/badge/PowerShell-5.1-5391FE) ![Licence](https://img.shields.io/badge/licence-MIT-green) ![Last commit](https://img.shields.io/github/last-commit/jason4bury/Picture-House)
 
 ## ✨ Features
 
@@ -34,7 +34,7 @@ Picture House reads your film folders over the network and turns them into a bro
 
 ## 📦 Installation
 
-1. Download `Picture-House-v1.04.zip` from the [latest release](../../releases/latest) and unzip it wherever you like to keep it.
+1. Download `Picture-House-v1.05.zip` from the [latest release](../../releases/latest) and unzip it wherever you like to keep it.
 2. Double-click **Picture House.cmd** in the unzipped folder. It makes a **Picture House** shortcut there and in the Start menu, and starts Picture House. From then on, use the shortcut, the Start menu or a pinned taskbar button.
 
 Nothing is installed and no Windows settings are changed. The shortcut runs the script with PowerShell's execution policy bypassed for that run only.
@@ -82,7 +82,7 @@ Picture House also understands:
 - CD1/CD2 split films and ISOs
 - `.nfo`, `poster.jpg` and `fanart.jpg` files written by Radarr, Jellyfin, Plex or Kodi
 
-Synology `@eaDir` folders are skipped, as is any folder listed under **Settings → Folders to ignore** (`Intros` and `Seerr` by default).
+Synology `@eaDir` folders are skipped, as is any folder listed under **Settings → Folders to ignore** (none to begin with, such as a folder of trailers).
 
 ## ⚙️ Configuration
 
